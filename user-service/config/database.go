@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"user-service/database/seeds"
 	"user-service/internal/core/domain/model"
 
 	"github.com/rs/zerolog/log"
@@ -36,7 +37,8 @@ func (cfg Config) ConnectionPostgres() (*Postgres, error) {
 		return nil, err
 	}
 
-
+	seeds.SeedRole(db)
+	seeds.SeedAdmin(db)
 
 	sqlDB.SetMaxOpenConns(cfg.Psql.DBMaxOpen)
 	sqlDB.SetMaxIdleConns(cfg.Psql.DBMaxIdle)
