@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"user-service/database/seeds"
 	"user-service/internal/core/domain/model"
 
@@ -17,6 +18,12 @@ type Postgres struct {
 }
 
 func (cfg Config) ConnectionPostgres() (*Postgres, error) {
+	cfg.Psql.User = strings.TrimSpace(cfg.Psql.User)
+	cfg.Psql.Password = strings.TrimSpace(cfg.Psql.Password)
+	cfg.Psql.Host = strings.TrimSpace(cfg.Psql.Host)
+	cfg.Psql.Port = strings.TrimSpace(cfg.Psql.Port)
+	cfg.Psql.DBName = strings.TrimSpace(cfg.Psql.DBName)
+
 	dbConnString := fmt.Sprintf("postgres://%s:%s@%s:%s/%s",
 		cfg.Psql.User,
 		cfg.Psql.Password,

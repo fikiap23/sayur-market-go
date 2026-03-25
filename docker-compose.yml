@@ -13,9 +13,9 @@ services:
     ports:
       - '5432:5432'
     healthcheck:
-      test: ['CMD', 'pg_isready', '-U postgres']
-      timeout: 5s
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d user_service']
       interval: 10s
+      timeout: 5s
       retries: 10
 
   # product_db:

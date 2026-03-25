@@ -1,6 +1,10 @@
 package config
 
-import "github.com/spf13/viper"
+import (
+	"strings"
+
+	"github.com/spf13/viper"
+)
 
 type App struct {
 	AppPort string `json:"app_port"`
@@ -43,11 +47,11 @@ func NewConfig() *Config {
 			UrlFrontFE:        viper.GetString("URL_FRONT_FE"),
 		},
 		Psql: PsqlDB{
-			Host:      viper.GetString("DATABASE_HOST"),
-			Port:      viper.GetString("DATABASE_PORT"),
-			User:      viper.GetString("DATABASE_USER"),
-			Password:  viper.GetString("DATABASE_PASSWORD"),
-			DBName:    viper.GetString("DATABASE_NAME"),
+			Host:      strings.TrimSpace(viper.GetString("DATABASE_HOST")),
+			Port:      strings.TrimSpace(viper.GetString("DATABASE_PORT")),
+			User:      strings.TrimSpace(viper.GetString("DATABASE_USER")),
+			Password:  strings.TrimSpace(viper.GetString("DATABASE_PASSWORD")),
+			DBName:    strings.TrimSpace(viper.GetString("DATABASE_NAME")),
 			DBMaxOpen: viper.GetInt("DATABASE_MAX_OPEN_CONNECTION"),
 			DBMaxIdle: viper.GetInt("DATABASE_MAX_IDLE_CONNECTION"),
 		},
