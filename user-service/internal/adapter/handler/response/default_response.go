@@ -7,12 +7,12 @@ import (
 
 type DefaultResponse struct {
 	Message string      `json:"message"`
-	Data    interface{} `json:"data"`
+	Data    any `json:"data"`
 }
 
 type DefaultResponseWithPaginations struct {
 	Message    string      `json:"message"`
-	Data       interface{} `json:"data"`
+	Data       any `json:"data"`
 	Pagination *Pagination `json:"pagination,omitempty"`
 }
 
