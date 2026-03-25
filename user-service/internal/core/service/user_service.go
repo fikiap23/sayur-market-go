@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"user-service/internal/adapter/repository"
 	"user-service/internal/core/domain/entity"
 	"user-service/utils/conv"
@@ -26,8 +27,8 @@ func (u *UserService) SignIn(ctx context.Context, req entity.UserEntity) (*entit
 	}
 
 	if !conv.CheckPasswordHash(req.Password, user.Password) {
-		log.Errorf("Failed to check password: %v", err)
-		return nil, "", err
+		log.Error("Failed to check password: invalid password")
+		return nil, "", errors.New("invalid password")
 	}
 
 	return user, "", nil

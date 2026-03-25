@@ -29,6 +29,21 @@ mod-verify:
 .PHONY: mod-all
 mod-all: mod-tidy mod-download mod-verify
 
+# Target untuk menjalankan docker compose up
+.PHONY: up
+up:
+	docker compose up -d
+
+# Target untuk menjalankan docker compose down
+.PHONY: down
+down:
+	docker compose down
+
+# Target untuk melihat log semua container
+.PHONY: logs
+logs:
+	docker compose logs -f
+
 # Bantuan
 .PHONY: help
 help:
@@ -37,3 +52,6 @@ help:
 	@echo "  make mod-download - Run go mod download in all services"
 	@echo "  make mod-verify   - Run go mod verify in all services"
 	@echo "  make mod-all      - Run all go mod commands in all services"
+	@echo "  make up           - Start all Docker containers with docker compose up -d"
+	@echo "  make down         - Stop all Docker containers with docker compose down"
+	@echo "  make logs         - View logs from all Docker containers with docker compose logs -f"
