@@ -36,6 +36,7 @@ func (cfg Config) ConnectionPostgres() (*Postgres, error) {
 	}
 
 	db.AutoMigrate(&model.User{}, &model.Role{}, &model.UserRole{}, &model.VerificationToken{})
+	db = db.Debug()
 	sqlDB, err := db.DB()
 	if err != nil {
 		log.Error().Err(err).Msg("[ConnectionPostgres-2] Failed to get database connection")
