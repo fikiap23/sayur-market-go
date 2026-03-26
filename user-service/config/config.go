@@ -59,5 +59,9 @@ func NewConfig() *Config {
 			DBMaxOpen: viper.GetInt("DATABASE_MAX_OPEN_CONNECTION"),
 			DBMaxIdle: viper.GetInt("DATABASE_MAX_IDLE_CONNECTION"),
 		},
+		Redis: Redis{
+			Host: strings.TrimSpace(viper.GetString("REDIS_HOST")),
+			Port: strings.TrimSpace(viper.GetString("REDIS_PORT")),
+		},
 	}
 }
