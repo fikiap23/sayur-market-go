@@ -44,7 +44,7 @@ func RunServer() {
 		return c.String(200, "OK")
 	})
 
-	handler.NewUserHandler(e, userService)
+	handler.NewUserHandler(e, userService, cfg, jwtService)
 
 	go func() {
 		if cfg.App.AppPort == "" {
