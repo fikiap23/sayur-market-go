@@ -11,8 +11,6 @@ import (
 	"gorm.io/gorm"
 )
 
-
-
 type Postgres struct {
 	DB *gorm.DB
 }

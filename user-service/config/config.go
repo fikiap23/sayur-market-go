@@ -27,11 +27,15 @@ type PsqlDB struct {
 	DBMaxIdle int    `json:"db_max_idle"`
 }
 
-
+type Redis struct {
+	Host string `json:"host"`
+	Port string `json:"port"`
+}
 
 type Config struct {
-	App      App      `json:"app"`
-	Psql     PsqlDB   `json:"psql"`
+	App   App    `json:"app"`
+	Psql  PsqlDB `json:"psql"`
+	Redis Redis  `json:"redis"`
 }
 
 func NewConfig() *Config {

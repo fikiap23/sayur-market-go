@@ -32,7 +32,8 @@ mod-all: mod-tidy mod-download mod-verify
 # Target untuk menjalankan docker compose up
 .PHONY: up
 up:
-	docker compose up -d
+	docker compose up -d --build
+	docker compose logs -f
 
 # Target untuk menjalankan docker compose down
 .PHONY: down

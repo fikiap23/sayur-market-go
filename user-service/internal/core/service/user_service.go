@@ -2,7 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
+	"user-service/config"
 	"user-service/internal/adapter/repository"
 	"user-service/internal/core/domain/entity"
 	"user-service/utils/conv"
@@ -14,28 +18,62 @@ type UserServiceInterface interface {
 	SignIn(ctx context.Context, req entity.UserEntity) (*entity.UserEntity, string, error)
 }
 
-type UserService struct {
-	repo repository.UserRepositoryInterface
+type userService struct {
+	repo       repository.UserRepositoryInterface
+	cfg        *config.Config
+	jwtService JwtServiceInterface
 }
 
 // SignIn implements [UserServiceInterface].
-func (u *UserService) SignIn(ctx context.Context, req entity.UserEntity) (*entity.UserEntity, string, error) {
+func (u *userService) SignIn(ctx context.Context, req entity.UserEntity) (*entity.UserEntity, string, error) {
 	user, err := u.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
-		log.Errorf("Failed to get user by email: %v", err)
+		log.Errorf("[UserService-1] SignIn: %v", err)
 		return nil, "", err
 	}
 
-	if !conv.CheckPasswordHash(req.Password, user.Password) {
-		log.Error("Failed to check password: invalid password")
-		return nil, "", errors.New("invalid password")
+	if checkPass := conv.CheckPasswordHash(req.Password, user.Password); !checkPass {
+		err = errors.New("password is incorrect")
+		log.Errorf("[UserService-2] SignIn: %v", err)
+		return nil, "", err
 	}
 
-	return user, "", nil
+	token, err := u.jwtService.GenerateToken(user.ID)
+	if err != nil {
+		log.Errorf("[UserService-3] SignIn: %v", err)
+		return nil, "", err
+	}
+
+	sessionData := map[string]interface{}{
+		"user_id":    user.ID,
+		"name":       user.Name,
+		"email":      user.Email,
+		"logged_in":  true,
+		"created_at": time.Now().String(),
+		"token":      token,
+		"role_name":  user.RoleName,
+	}
+
+	jsonData, err := json.Marshal(sessionData)
+	if err != nil {
+		fmt.Println("Error encoding JSON:", err)
+		return nil, "", err
+	}
+
+	redisConn := config.NewConfig().NewRedisClient()
+	err = redisConn.Set(ctx, token, jsonData, time.Hour*23).Err()
+	if err != nil {
+		log.Errorf("[UserService-4] SignIn: %v", err)
+		return nil, "", err
+	}
+
+	return user, token, nil
 }
 
-func NewUserService(repo repository.UserRepositoryInterface) UserServiceInterface {
-	return &UserService{
-		repo: repo,
+func NewUserService(repo repository.UserRepositoryInterface, cfg *config.Config, jwtService JwtServiceInterface) UserServiceInterface {
+	return &userService{
+		repo:       repo,
+		cfg:        cfg,
+		jwtService: jwtService,
 	}
 }

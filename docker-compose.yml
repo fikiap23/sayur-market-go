@@ -87,7 +87,7 @@ services:
   #         retries: 10
 
   redis:
-    image: redis:latest
+    image: redis:7.2.7-alpine3.21
     restart: unless-stopped
     ports:
       - '6379:6379'
@@ -96,6 +96,17 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    restart: unless-stopped
+    ports:
+      - '8081:8081'
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
 
   rabbitmq:
     image: rabbitmq:3-management

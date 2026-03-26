@@ -16,6 +16,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/labstack/gommon/log"
+
+	middlewareGateway "user-service/internal/middleware"
 )
 
 func RunServer() {
@@ -27,10 +29,12 @@ func RunServer() {
 	}
 
 	userRepo := repository.NewUserRepository(db.DB)
-	userService := service.NewUserService(userRepo)
+	jwtService := service.NewJwtService(cfg)
+	userService := service.NewUserService(userRepo, cfg, jwtService)
 
 	e := echo.New()
 	e.Use(middleware.CORS())
+	e.Use(middlewareGateway.GatewayValidationMiddleware())
 
 	customValidator := validator.NewValidator()
 	en.RegisterDefaultTranslations(customValidator.Validator, customValidator.Translator)
