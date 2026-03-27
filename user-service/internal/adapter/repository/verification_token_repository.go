@@ -56,6 +56,7 @@ func (v *verificationTokenRepository) CreateVerificationToken(ctx context.Contex
 		UserID:    req.UserID,
 		Token:     req.Token,
 		TokenType: req.TokenType,
+		ExpiresAt: req.ExpiresAt,
 	}
 
 	if err := v.db.Create(&modelVerificationToken).Error; err != nil {

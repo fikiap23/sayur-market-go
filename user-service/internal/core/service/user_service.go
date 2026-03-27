@@ -216,6 +216,7 @@ func (u *userService) ForgotPassword(ctx context.Context, req entity.UserEntity)
 		UserID:    user.ID,
 		Token:     token,
 		TokenType: utils.NOTIF_EMAIL_FORGOT_PASSWORD,
+		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
 	err = u.repoToken.CreateVerificationToken(ctx, reqEntity)
