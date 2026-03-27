@@ -25,10 +25,14 @@ type Redis struct {
 }
 
 type RabbitMQ struct {
-	Host     string `json:"host"`
-	Port     string `json:"port"`
-	User     string `json:"user"`
-	Password string `json:"password"`
+	Host           string `json:"host"`
+	Port           string `json:"port"`
+	User           string `json:"user"`
+	Password       string `json:"password"`
+	WorkerPoolSize int    `json:"worker_pool_size"`
+	PrefetchCount  int    `json:"prefetch_count"`
+	MaxRetries     int    `json:"max_retries"`
+	ProcessTimeout int    `json:"process_timeout_sec"`
 }
 
 type EmailConfig struct {
@@ -52,7 +56,7 @@ func NewConfig() *Config {
 	return &Config{
 		App: App{
 			AppPort: viper.GetString("APP_PORT"),
-			AppEnv:  viper.GetString("APP_PORT"),
+			AppEnv:  viper.GetString("APP_ENV"),
 
 			JwtSecretKey: viper.GetString("JWT_SECRET_KEY"),
 		},
@@ -66,10 +70,14 @@ func NewConfig() *Config {
 			DBMaxIdle: viper.GetInt("DATABASE_MAX_IDLE_CONNECTION"),
 		},
 		RabbitMQ: RabbitMQ{
-			Host:     viper.GetString("RABBITMQ_HOST"),
-			Port:     viper.GetString("RABBITMQ_PORT"),
-			User:     viper.GetString("RABBITMQ_USER"),
-			Password: viper.GetString("RABBITMQ_PASSWORD"),
+			Host:           viper.GetString("RABBITMQ_HOST"),
+			Port:           viper.GetString("RABBITMQ_PORT"),
+			User:           viper.GetString("RABBITMQ_USER"),
+			Password:       viper.GetString("RABBITMQ_PASSWORD"),
+			WorkerPoolSize: viper.GetInt("RABBITMQ_WORKER_POOL_SIZE"),
+			PrefetchCount:  viper.GetInt("RABBITMQ_PREFETCH_COUNT"),
+			MaxRetries:     viper.GetInt("RABBITMQ_MAX_RETRIES"),
+			ProcessTimeout: viper.GetInt("RABBITMQ_PROCESS_TIMEOUT_SEC"),
 		},
 		EmailConf: EmailConfig{
 			Host:     viper.GetString("EMAIL_HOST"),
