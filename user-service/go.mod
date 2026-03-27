@@ -52,6 +52,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/streadway/amqp v1.1.0
+	github.com/supabase-community/storage-go v0.8.1
 	golang.org/x/text v0.32.0 // indirect
 	gorm.io/driver/postgres v1.6.0
 )

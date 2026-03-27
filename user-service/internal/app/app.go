@@ -9,6 +9,7 @@ import (
 	"user-service/config"
 	"user-service/internal/adapter/handler"
 	"user-service/internal/adapter/repository"
+	"user-service/internal/adapter/storage"
 	"user-service/internal/core/service"
 	"user-service/utils/validator"
 
@@ -27,6 +28,8 @@ func RunServer() {
 		log.Fatalf("[RunServer-1] %v", err)
 		return
 	}
+
+	storageHandler := storage.NewSupabase(cfg)
 
 	userRepo := repository.NewUserRepository(db.DB)
 	tokenRepo := repository.NewVerificationTokenRepository(db.DB)
@@ -49,6 +52,7 @@ func RunServer() {
 	})
 
 	handler.NewUserHandler(e, userService, cfg, jwtService)
+	handler.NewUploadImage(e, cfg, storageHandler, jwtService)
 	handler.NewRoleHandler(e, roleService, cfg, jwtService)
 
 	go func() {

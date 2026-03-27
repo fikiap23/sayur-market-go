@@ -1,10 +1,6 @@
 package config
 
-import (
-	"strings"
-
-	"github.com/spf13/viper"
-)
+import "github.com/spf13/viper"
 
 type App struct {
 	AppPort string `json:"app_port"`
@@ -34,6 +30,12 @@ type RabbitMQ struct {
 	Password string `json:"password"`
 }
 
+type Supabase struct {
+	URL    string `json:"url"`
+	Key    string `json:"key"`
+	Bucket string `json:"bucket"`
+}
+
 type Redis struct {
 	Host string `json:"host"`
 	Port string `json:"port"`
@@ -42,15 +44,16 @@ type Redis struct {
 type Config struct {
 	App      App      `json:"app"`
 	Psql     PsqlDB   `json:"psql"`
-	Redis    Redis    `json:"redis"`
 	RabbitMQ RabbitMQ `json:"rabbitmq"`
+	Storage  Supabase `json:"storage"`
+	Redis    Redis    `json:"redis"`
 }
 
 func NewConfig() *Config {
 	return &Config{
 		App: App{
 			AppPort: viper.GetString("APP_PORT"),
-			AppEnv:  viper.GetString("APP_ENV"),
+			AppEnv:  viper.GetString("APP_PORT"),
 
 			JwtSecretKey: viper.GetString("JWT_SECRET_KEY"),
 			JwtIssuer:    viper.GetString("JWT_ISSUER"),
@@ -59,11 +62,11 @@ func NewConfig() *Config {
 			UrlFrontFE:        viper.GetString("URL_FRONT_FE"),
 		},
 		Psql: PsqlDB{
-			Host:      strings.TrimSpace(viper.GetString("DATABASE_HOST")),
-			Port:      strings.TrimSpace(viper.GetString("DATABASE_PORT")),
-			User:      strings.TrimSpace(viper.GetString("DATABASE_USER")),
-			Password:  strings.TrimSpace(viper.GetString("DATABASE_PASSWORD")),
-			DBName:    strings.TrimSpace(viper.GetString("DATABASE_NAME")),
+			Host:      viper.GetString("DATABASE_HOST"),
+			Port:      viper.GetString("DATABASE_PORT"),
+			User:      viper.GetString("DATABASE_USER"),
+			Password:  viper.GetString("DATABASE_PASSWORD"),
+			DBName:    viper.GetString("DATABASE_NAME"),
 			DBMaxOpen: viper.GetInt("DATABASE_MAX_OPEN_CONNECTION"),
 			DBMaxIdle: viper.GetInt("DATABASE_MAX_IDLE_CONNECTION"),
 		},
@@ -73,9 +76,14 @@ func NewConfig() *Config {
 			User:     viper.GetString("RABBITMQ_USER"),
 			Password: viper.GetString("RABBITMQ_PASSWORD"),
 		},
+		Storage: Supabase{
+			URL:    viper.GetString("SUPABASE_STORAGE_URL"),
+			Key:    viper.GetString("SUPABASE_STORAGE_KEY"),
+			Bucket: viper.GetString("SUPABASE_STORAGE_BUCKET"),
+		},
 		Redis: Redis{
-			Host: strings.TrimSpace(viper.GetString("REDIS_HOST")),
-			Port: strings.TrimSpace(viper.GetString("REDIS_PORT")),
+			Host: viper.GetString("REDIS_HOST"),
+			Port: viper.GetString("REDIS_PORT"),
 		},
 	}
 }

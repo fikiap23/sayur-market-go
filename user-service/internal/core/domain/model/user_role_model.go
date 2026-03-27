@@ -15,6 +15,9 @@ type UserRole struct {
 	DeletedAt gorm.DeletedAt `gorm:"index"`
 }
 
+type Tabler interface {
+	TableName() string
+}
 
 func (UserRole) TableName() string {
 	return "user_role"
