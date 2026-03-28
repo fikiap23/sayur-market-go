@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"notification-service/config"
-
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 )
@@ -34,9 +32,10 @@ type ConsumerOption func(*Consumer)
 
 // Consumer manages a RabbitMQ queue subscription with a bounded worker pool,
 // manual ACK/NACK, retry with republish, optional DLQ, and automatic reconnection.
+// It obtains channels from a shared ConnectionManager rather than owning a
+// dedicated AMQP connection.
 type Consumer struct {
-	cfg            *config.Config
-	conn           *amqp.Connection
+	connMgr        *ConnectionManager
 	channel        *amqp.Channel
 	handler        MessageHandler
 	queueName      string
@@ -96,14 +95,14 @@ func WithDLQ(enable bool) ConsumerOption {
 }
 
 func NewConsumer(
-	cfg *config.Config,
+	connMgr *ConnectionManager,
 	queueName string,
 	handler MessageHandler,
 	logger zerolog.Logger,
 	opts ...ConsumerOption,
 ) *Consumer {
 	c := &Consumer{
-		cfg:            cfg,
+		connMgr:        connMgr,
 		handler:        handler,
 		queueName:      queueName,
 		workerPoolSize: defaultWorkerPoolSize,
@@ -120,7 +119,7 @@ func NewConsumer(
 }
 
 // Start begins consuming messages and blocks until ctx is cancelled.
-// On connection loss it reconnects automatically with a delay.
+// On channel / connection loss it re-opens a channel automatically.
 func (c *Consumer) Start(ctx context.Context) error {
 	for {
 		err := c.run(ctx)
@@ -141,12 +140,14 @@ func (c *Consumer) Start(ctx context.Context) error {
 	}
 }
 
-// run performs a single connect→consume session. It returns when the connection
-// drops or ctx is cancelled, allowing Start to decide whether to reconnect.
+// run performs a single channel session. It returns when the channel or
+// connection drops, or ctx is cancelled, allowing Start to retry.
 func (c *Consumer) run(ctx context.Context) error {
-	if err := c.connect(); err != nil {
-		return fmt.Errorf("connect: %w", err)
+	ch, conn, err := c.connMgr.OpenChannel()
+	if err != nil {
+		return fmt.Errorf("open channel: %w", err)
 	}
+	c.channel = ch
 
 	if err := c.setupQueue(); err != nil {
 		return fmt.Errorf("setup queue: %w", err)
@@ -177,14 +178,9 @@ func (c *Consumer) run(ctx context.Context) error {
 		Bool("dlq_enabled", c.enableDLQ).
 		Msg("consumer started")
 
-	// Channel-level and connection-level close notifications let us
-	// react immediately to broker disconnects without polling.
-	connClose := c.conn.NotifyClose(make(chan *amqp.Error, 1))
+	connClose := conn.NotifyClose(make(chan *amqp.Error, 1))
 	chanClose := c.channel.NotifyClose(make(chan *amqp.Error, 1))
 
-	// jobs channel is bounded by prefetchCount so the dispatch select
-	// never blocks: QoS guarantees the server won't push more messages
-	// than the prefetch limit while earlier deliveries remain unacked.
 	jobs := make(chan amqp.Delivery, c.prefetchCount)
 
 	var wg sync.WaitGroup
@@ -218,22 +214,6 @@ loop:
 	wg.Wait()
 
 	return runErr
-}
-
-func (c *Consumer) connect() error {
-	conn, err := c.cfg.NewRabbitMQ()
-	if err != nil {
-		return fmt.Errorf("dial: %w", err)
-	}
-	c.conn = conn
-
-	ch, err := conn.Channel()
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("open channel: %w", err)
-	}
-	c.channel = ch
-	return nil
 }
 
 func (c *Consumer) setupQueue() error {
@@ -315,7 +295,6 @@ func (c *Consumer) handleFailure(ctx context.Context, d amqp.Delivery, processEr
 			return
 		}
 
-		// ACK the original delivery since we republished a retry copy.
 		if ackErr := d.Ack(false); ackErr != nil {
 			log.Error().Err(ackErr).Msg("failed to ACK original after republish")
 		}
@@ -327,8 +306,6 @@ func (c *Consumer) handleFailure(ctx context.Context, d amqp.Delivery, processEr
 		Int("retry", retryCount).
 		Msg("max retries exceeded, rejecting message")
 
-	// NACK without requeue — if DLQ is configured the broker dead-letters
-	// the message; otherwise it is discarded.
 	_ = d.Nack(false, false)
 }
 
@@ -360,13 +337,11 @@ func cloneHeaders(src amqp.Table) amqp.Table {
 	return dst
 }
 
+// cleanup closes only the consumer's own channel; the shared connection
+// is managed by ConnectionManager.
 func (c *Consumer) cleanup() {
 	if c.channel != nil {
 		_ = c.channel.Close()
 		c.channel = nil
-	}
-	if c.conn != nil {
-		_ = c.conn.Close()
-		c.conn = nil
 	}
 }

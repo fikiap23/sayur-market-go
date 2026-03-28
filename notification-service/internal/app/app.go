@@ -39,6 +39,8 @@ func RunServer() {
 
 	notifHandler := rabbitmq.NewNotificationHandler(emailMessage, notifRepo, notifService, logger)
 
+	connMgr := rabbitmq.NewConnectionManager(cfg, logger)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -52,7 +54,7 @@ func RunServer() {
 
 	var consumerWg sync.WaitGroup
 	for _, queue := range queues {
-		consumer := rabbitmq.NewConsumer(cfg, queue, notifHandler, logger,
+		consumer := rabbitmq.NewConsumer(connMgr, queue, notifHandler, logger,
 			rabbitmq.WithWorkerPoolSize(cfg.RabbitMQ.WorkerPoolSize),
 			rabbitmq.WithPrefetchCount(cfg.RabbitMQ.PrefetchCount),
 			rabbitmq.WithMaxRetries(cfg.RabbitMQ.MaxRetries),
@@ -99,6 +101,11 @@ func RunServer() {
 	}
 
 	consumerWg.Wait()
+
+	if err := connMgr.Close(); err != nil {
+		logger.Error().Err(err).Msg("rabbitmq connection close error")
+	}
+
 	logger.Info().Msg("shutdown complete")
 }
 
