@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"time"
 	"user-service/config"
 	"user-service/internal/adapter"
@@ -74,11 +75,7 @@ func (u *uploadImage) UploadImage(c echo.Context) error {
 }
 
 func getExtension(fileName string) string {
-	ext := "." + fileName[len(fileName)-3:] // Ambil 3 karakter terakhir untuk ekstensi
-	if len(fileName) > 4 && fileName[len(fileName)-4] == '.' {
-		ext = "." + fileName[len(fileName)-4:]
-	}
-	return ext
+	return filepath.Ext(fileName)
 }
 
 func NewUploadImage(e *echo.Echo, cfg *config.Config, storageHandler storage.SupabaseInterface, jwtService service.JwtServiceInterface) UploadImageInterface {
