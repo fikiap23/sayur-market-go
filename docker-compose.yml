@@ -18,22 +18,22 @@ services:
       timeout: 5s
       retries: 10
 
-  # product_db:
-  #     image: postgres:16
-  #     environment:
-  #         POSTGRES_USER: postgres
-  #         POSTGRES_PASSWORD: lokal
-  #         POSTGRES_DB: product_service
-  #     restart: unless-stopped
-  #     volumes:
-  #         - postgres_product_data:/var/lib/postgresql/data
-  #     ports:
-  #         - "5433:5432"
-  #     healthcheck:
-  #         test: ["CMD", "pg_isready", "-U postgres"]
-  #         timeout: 5s
-  #         interval: 10s
-  #         retries: 10
+  product_db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: lokal
+      POSTGRES_DB: product_service
+    restart: unless-stopped
+    volumes:
+      - postgres_product_data:/var/lib/postgresql/data
+    ports:
+      - '5433:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d product_service']
+      timeout: 5s
+      interval: 10s
+      retries: 10
 
   # order_db:
   #     image: postgres:16
@@ -123,23 +123,24 @@ services:
       timeout: 5s
       retries: 5
 
-  # elasticsearch:
-  #     image: elasticsearch:7.17.10
-  #     restart: unless-stopped
-  #     environment:
-  #         - discovery.type=single-node
-  #         - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-  #     ports:
-  #         - "9200:9200"
-  #         - "9300:9300"
-  #     healthcheck:
-  #         test: [
-  #             "CMD-SHELL",
-  #             "curl --silent --fail localhost:9200/_cluster/health | grep -q '\"status\":\"yellow\"\\|\"status\":\"green\"'"
-  #         ]
-  #         interval: 10s
-  #         timeout: 5s
-  #         retries: 5
+  elasticsearch:
+    image: elasticsearch:7.17.10
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - 'ES_JAVA_OPTS=-Xms512m -Xmx512m'
+    ports:
+      - '9200:9200'
+      - '9300:9300'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "curl --silent --fail localhost:9200/_cluster/health | grep -q '\"status\":\"yellow\"\\|\"status\":\"green\"'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   user-service:
     build:
@@ -157,23 +158,23 @@ services:
       rabbitmq:
         condition: service_healthy
 
-  # product-service:
-  #     build:
-  #         context: ./product-service
-  #         dockerfile: Dockerfile
-  #     env_file:
-  #         - ./product-service/.env
-  #     ports:
-  #         - "8082:8082"
-  #     depends_on:
-  #         product_db:
-  #             condition: service_healthy
-  #         redis:
-  #             condition: service_healthy
-  #         rabbitmq:
-  #             condition: service_healthy
-  #         elasticsearch:
-  #             condition: service_healthy
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    env_file:
+      - ./product-service/.env
+    ports:
+      - '8082:8082'
+    depends_on:
+      product_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
 
   # order-service:
   #     build:
@@ -233,7 +234,7 @@ services:
 
 volumes:
   postgres_user_data:
-  # postgres_product_data:
+  postgres_product_data:
   # postgres_order_data:
   # postgres_payment_data:
   postgres_notification_data:
