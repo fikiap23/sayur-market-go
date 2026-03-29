@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"time"
 	"user-service/config"
-	"user-service/internal/adapter/message"
 	"user-service/internal/adapter/repository"
 	"user-service/internal/core/domain/entity"
+	"user-service/internal/core/domain/model"
 	"user-service/utils"
 	"user-service/utils/conv"
 
 	"github.com/google/uuid"
-	"github.com/labstack/gommon/log"
+	"github.com/rs/zerolog"
+	"gorm.io/gorm"
 )
 
 type UserServiceInterface interface {
@@ -26,7 +27,6 @@ type UserServiceInterface interface {
 	GetProfileUser(ctx context.Context, userID int64) (*entity.UserEntity, error)
 	UpdateDataUser(ctx context.Context, req entity.UserEntity) error
 
-	// Modul Customers Admin
 	GetCustomerAll(ctx context.Context, query entity.QueryStringCustomer) ([]entity.UserEntity, int64, int64, error)
 	GetCustomerByID(ctx context.Context, customerID int64) (*entity.UserEntity, error)
 	CreateCustomer(ctx context.Context, req entity.UserEntity) error
@@ -35,144 +35,129 @@ type UserServiceInterface interface {
 }
 
 type userService struct {
+	db         *gorm.DB
 	repo       repository.UserRepositoryInterface
 	cfg        *config.Config
 	jwtService JwtServiceInterface
 	repoToken  repository.VerificationTokenRepositoryInterface
-	eventPub   message.EventPublisher
+	outboxRepo repository.OutboxRepositoryInterface
+	logger     zerolog.Logger
 }
 
-// DeleteCustomer implements UserServiceInterface.
 func (u *userService) DeleteCustomer(ctx context.Context, customerID int64) error {
 	return u.repo.DeleteCustomer(ctx, customerID)
 }
 
-// UpdateCustomer implements UserServiceInterface.
+// UpdateCustomer updates a customer. If the password was changed, a notification
+// event is written to the outbox atomically with the update.
 func (u *userService) UpdateCustomer(ctx context.Context, req entity.UserEntity) error {
 	passwordNoencrypt := ""
 	if req.Password != "" {
 		passwordNoencrypt = req.Password
 		password, err := conv.HashPassword(req.Password)
 		if err != nil {
-			log.Fatalf("[UserService-1] UpdateCustomer: %v", err)
+			u.logger.Error().Err(err).Msg("hash password failed")
 			return err
 		}
-
 		req.Password = password
 	}
 
-	err := u.repo.UpdateCustomer(ctx, req)
-	if err != nil {
-		log.Fatalf("[UserService-2] UpdateCustomer: %v", err)
-		return err
-	}
+	return u.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txRepo := u.repo.WithTx(tx)
 
-	if passwordNoencrypt != "" {
-		messageparam := fmt.Sprintf("You're account has been updated. Please login use: \n Email: %s\nPassword: %s", req.Email, passwordNoencrypt)
-		go u.eventPub.PublishNotification(context.Background(), req.ID,
-			req.Email,
-			messageparam,
-			utils.NOTIF_EMAIL_UPDATE_CUSTOMER,
-			"Updated Data")
-	}
+		if err := txRepo.UpdateCustomer(ctx, req); err != nil {
+			return err
+		}
 
-	return nil
+		if passwordNoencrypt != "" {
+			msg := fmt.Sprintf("You're account has been updated. Please login use: \n Email: %s\nPassword: %s", req.Email, passwordNoencrypt)
+			if err := u.insertNotifOutbox(tx, req.ID, req.Email, msg, utils.NOTIF_EMAIL_UPDATE_CUSTOMER, "Updated Data"); err != nil {
+				u.logger.Error().Err(err).Msg("insert outbox for update customer failed")
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
-// CreateCustomer implements UserServiceInterface.
+// CreateCustomer creates a customer and writes a notification outbox event
+// in the same transaction.
 func (u *userService) CreateCustomer(ctx context.Context, req entity.UserEntity) error {
 	passwordNoEncrypt := req.Password
 	password, err := conv.HashPassword(passwordNoEncrypt)
 	if err != nil {
-		log.Fatalf("[UserService-1] CreateCustomer: %v", err)
+		u.logger.Error().Err(err).Msg("hash password failed")
 		return err
 	}
-
 	req.Password = password
-	userID, err := u.repo.CreateCustomer(ctx, req)
-	if err != nil {
-		log.Fatalf("[UserService-2] CreateCustomer: %v", err)
-		return err
-	}
 
-	messageparam := fmt.Sprintf("You have been registered in Sayur Project. Please login use: \n Email: %s\nPassword: %s", req.Email, passwordNoEncrypt)
-	go u.eventPub.PublishNotification(context.Background(), userID,
-		req.Email,
-		messageparam,
-		utils.NOTIF_EMAIL_CREATE_CUSTOMER,
-		"Account Exists")
+	return u.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txRepo := u.repo.WithTx(tx)
 
-	return nil
+		userID, err := txRepo.CreateCustomer(ctx, req)
+		if err != nil {
+			return err
+		}
+
+		msg := fmt.Sprintf("You have been registered in Sayur Project. Please login use: \n Email: %s\nPassword: %s", req.Email, passwordNoEncrypt)
+		if err := u.insertNotifOutbox(tx, userID, req.Email, msg, utils.NOTIF_EMAIL_CREATE_CUSTOMER, "Account Exists"); err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
-// GetCustomerByID implements UserServiceInterface.
 func (u *userService) GetCustomerByID(ctx context.Context, customerID int64) (*entity.UserEntity, error) {
 	return u.repo.GetCustomerByID(ctx, customerID)
 }
 
-// GetCustomerAll implements UserServiceInterface.
 func (u *userService) GetCustomerAll(ctx context.Context, query entity.QueryStringCustomer) ([]entity.UserEntity, int64, int64, error) {
 	return u.repo.GetCustomerAll(ctx, query)
 }
 
-// UpdateDataUser implements UserServiceInterface.
 func (u *userService) UpdateDataUser(ctx context.Context, req entity.UserEntity) error {
 	return u.repo.UpdateDataUser(ctx, req)
 }
 
-// GetProfileUser implements UserServiceInterface.
 func (u *userService) GetProfileUser(ctx context.Context, userID int64) (*entity.UserEntity, error) {
 	return u.repo.GetUserByID(ctx, userID)
 }
 
-// UpdatePassword implements UserServiceInterface.
 func (u *userService) UpdatePassword(ctx context.Context, req entity.UserEntity) error {
 	token, err := u.repoToken.GetDataByToken(ctx, req.Token)
 	if err != nil {
-		log.Errorf("[UserService-1] UpdatePassword: %v", err)
 		return err
 	}
 
 	if token.TokenType != "reset_password" {
-		err = errors.New("401")
-		log.Errorf("[UserService-2] UpdatePassword: %v", err)
-		return err
+		return errors.New("401")
 	}
 
 	password, err := conv.HashPassword(req.Password)
 	if err != nil {
-		log.Errorf("[UserService-3] UpdatePassword: %v", err)
 		return err
 	}
 	req.Password = password
 	req.ID = token.UserID
 
-	err = u.repo.UpdatePasswordByID(ctx, req)
-	if err != nil {
-		log.Errorf("[UserService-4] UpdatePassword: %v", err)
-		return err
-	}
-
-	return nil
+	return u.repo.UpdatePasswordByID(ctx, req)
 }
 
-// VerifyToken implements UserServiceInterface.
 func (u *userService) VerifyToken(ctx context.Context, token string) (*entity.UserEntity, error) {
 	verifyToken, err := u.repoToken.GetDataByToken(ctx, token)
 	if err != nil {
-		log.Errorf("[UserService-1] VerifyToken: %v", err)
 		return nil, err
 	}
 
 	user, err := u.repo.UpdateUserVerified(ctx, verifyToken.UserID)
 	if err != nil {
-		log.Errorf("[UserService-2] VerifyToken: %v", err)
 		return nil, err
 	}
 
 	accessToken, err := u.jwtService.GenerateToken(user.ID)
 	if err != nil {
-		log.Errorf("[UserService-3] VerifyToken: %v", err)
 		return nil, err
 	}
 
@@ -188,102 +173,92 @@ func (u *userService) VerifyToken(ctx context.Context, token string) (*entity.Us
 
 	jsonData, err := json.Marshal(sessionData)
 	if err != nil {
-		fmt.Println("Error encoding JSON:", err)
 		return nil, err
 	}
 
 	redisConn := config.NewConfig().NewRedisClient()
-	err = redisConn.Set(ctx, token, jsonData, time.Hour*23).Err()
-	if err != nil {
-		log.Errorf("[UserService-4] VerifyToken: %v", err)
+	if err := redisConn.Set(ctx, token, jsonData, time.Hour*23).Err(); err != nil {
 		return nil, err
 	}
 
 	user.Token = accessToken
-
 	return user, nil
 }
 
-// ForgotPassword implements UserServiceInterface.
+// ForgotPassword creates a verification token and writes a notification
+// outbox event atomically.
 func (u *userService) ForgotPassword(ctx context.Context, req entity.UserEntity) error {
 	user, err := u.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
-		log.Errorf("[UserService-1] ForgotPassword: %v", err)
 		return err
 	}
 
 	token := uuid.New().String()
-	reqEntity := entity.VerificationTokenEntity{
-		UserID:    user.ID,
-		Token:     token,
-		TokenType: utils.NOTIF_EMAIL_FORGOT_PASSWORD,
-		ExpiresAt: time.Now().Add(time.Hour),
-	}
 
-	err = u.repoToken.CreateVerificationToken(ctx, reqEntity)
-	if err != nil {
-		log.Errorf("[UserService-2] ForgotPassword: %v", err)
-		return err
-	}
+	return u.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txTokenRepo := u.repoToken.WithTx(tx)
 
-	urlForgot := fmt.Sprintf("%s/auth/update-password?token=%s", u.cfg.App.UrlFrontFE, token)
-	messageparam := fmt.Sprintf("Please click link below for reset password: %v", urlForgot)
-	go u.eventPub.PublishNotification(context.Background(), user.ID,
-		req.Email,
-		messageparam,
-		utils.NOTIF_EMAIL_FORGOT_PASSWORD,
-		"Reset Password")
+		reqEntity := entity.VerificationTokenEntity{
+			UserID:    user.ID,
+			Token:     token,
+			TokenType: utils.NOTIF_EMAIL_FORGOT_PASSWORD,
+			ExpiresAt: time.Now().Add(time.Hour),
+		}
 
-	return nil
+		if err := txTokenRepo.CreateVerificationToken(ctx, reqEntity); err != nil {
+			return err
+		}
+
+		urlForgot := fmt.Sprintf("%s/auth/update-password?token=%s", u.cfg.App.UrlFrontFE, token)
+		msg := fmt.Sprintf("Please click link below for reset password: %v", urlForgot)
+		if err := u.insertNotifOutbox(tx, user.ID, req.Email, msg, utils.NOTIF_EMAIL_FORGOT_PASSWORD, "Reset Password"); err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
-// CreateUserAccount implements UserServiceInterface.
+// CreateUserAccount creates a user account and writes a verification email
+// outbox event in the same transaction.
 func (u *userService) CreateUserAccount(ctx context.Context, req entity.UserEntity) error {
 	password, err := conv.HashPassword(req.Password)
 	if err != nil {
-		log.Errorf("[UserService-1] CreateUserAccount: %v", err)
 		return err
 	}
-
 	req.Password = password
 	req.Token = uuid.New().String()
 
-	userID, err := u.repo.CreateUserAccount(ctx, req)
-	if err != nil {
-		log.Errorf("[UserService-2] CreateUserAccount: %v", err)
-		return err
-	}
+	return u.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txRepo := u.repo.WithTx(tx)
 
-	verifyURL := fmt.Sprintf("%s/auth/verify-account?token=%s", u.cfg.App.UrlFrontFE, req.Token)
-	verifyMsg := fmt.Sprintf("Please verify your account by clicking the link: %s", verifyURL)
-	go u.eventPub.PublishNotification(context.Background(),
-		userID,
-		req.Email,
-		verifyMsg,
-		utils.NOTIF_EMAIL_VERIFICATION,
-		"Verify Your Account",
-	)
+		userID, err := txRepo.CreateUserAccount(ctx, req)
+		if err != nil {
+			return err
+		}
 
-	return nil
+		verifyURL := fmt.Sprintf("%s/auth/verify-account?token=%s", u.cfg.App.UrlFrontFE, req.Token)
+		msg := fmt.Sprintf("Please verify your account by clicking the link: %s", verifyURL)
+		if err := u.insertNotifOutbox(tx, userID, req.Email, msg, utils.NOTIF_EMAIL_VERIFICATION, "Verify Your Account"); err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
-// SignIn implements UserServiceInterface.
 func (u *userService) SignIn(ctx context.Context, req entity.UserEntity) (*entity.UserEntity, string, error) {
 	user, err := u.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
-		log.Errorf("[UserService-1] SignIn: %v", err)
 		return nil, "", err
 	}
 
 	if checkPass := conv.CheckPasswordHash(req.Password, user.Password); !checkPass {
-		err = errors.New("password is incorrect")
-		log.Errorf("[UserService-2] SignIn: %v", err)
-		return nil, "", err
+		return nil, "", errors.New("password is incorrect")
 	}
 
 	token, err := u.jwtService.GenerateToken(user.ID)
 	if err != nil {
-		log.Errorf("[UserService-3] SignIn: %v", err)
 		return nil, "", err
 	}
 
@@ -299,26 +274,63 @@ func (u *userService) SignIn(ctx context.Context, req entity.UserEntity) (*entit
 
 	jsonData, err := json.Marshal(sessionData)
 	if err != nil {
-		fmt.Println("Error encoding JSON:", err)
 		return nil, "", err
 	}
 
 	redisConn := config.NewConfig().NewRedisClient()
-	err = redisConn.Set(ctx, token, jsonData, time.Hour*23).Err()
-	if err != nil {
-		log.Errorf("[UserService-4] SignIn: %v", err)
+	if err := redisConn.Set(ctx, token, jsonData, time.Hour*23).Err(); err != nil {
 		return nil, "", err
 	}
 
 	return user, token, nil
 }
 
-func NewUserService(repo repository.UserRepositoryInterface, cfg *config.Config, jwtService JwtServiceInterface, repoToken repository.VerificationTokenRepositoryInterface, eventPub message.EventPublisher) UserServiceInterface {
+// insertNotifOutbox builds a notification payload and writes it to the outbox
+// table using the provided DB handle (transaction-safe).
+func (u *userService) insertNotifOutbox(tx *gorm.DB, userID int64, email, msg, queueName, subject string) error {
+	notifType := "EMAIL"
+	if queueName == utils.PUSH_NOTIF {
+		notifType = "PUSH"
+	}
+
+	payload := map[string]interface{}{
+		"receiver_email":    email,
+		"message":           msg,
+		"receiver_id":       userID,
+		"subject":           subject,
+		"notification_type": notifType,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal outbox payload: %w", err)
+	}
+
+	event := &model.OutboxEvent{
+		ID:        uuid.New().String(),
+		EventType: queueName,
+		Payload:   string(data),
+		Status:    model.OutboxStatusPending,
+	}
+	return u.outboxRepo.Insert(tx, event)
+}
+
+func NewUserService(
+	db *gorm.DB,
+	repo repository.UserRepositoryInterface,
+	cfg *config.Config,
+	jwtService JwtServiceInterface,
+	repoToken repository.VerificationTokenRepositoryInterface,
+	outboxRepo repository.OutboxRepositoryInterface,
+	logger zerolog.Logger,
+) UserServiceInterface {
 	return &userService{
+		db:         db,
 		repo:       repo,
 		cfg:        cfg,
 		jwtService: jwtService,
 		repoToken:  repoToken,
-		eventPub:   eventPub,
+		outboxRepo: outboxRepo,
+		logger:     logger.With().Str("component", "user_service").Logger(),
 	}
 }

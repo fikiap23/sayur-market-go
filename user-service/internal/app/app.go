@@ -4,11 +4,12 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 	"user-service/config"
 	"user-service/internal/adapter/handler"
-	"user-service/internal/adapter/message"
+	"user-service/internal/adapter/outbox"
 	rmq "user-service/internal/adapter/rabbitmq"
 	"user-service/internal/adapter/repository"
 	"user-service/internal/adapter/storage"
@@ -64,20 +65,37 @@ func RunServer() {
 		return
 	}
 
-	queues := []string{
-		utils.NOTIF_EMAIL_VERIFICATION,
-		utils.NOTIF_EMAIL_FORGOT_PASSWORD,
-		utils.NOTIF_EMAIL_CREATE_CUSTOMER,
-		utils.NOTIF_EMAIL_UPDATE_CUSTOMER,
-		utils.PUSH_NOTIF,
+	// --- Outbox worker setup ---
+	outboxRepo := repository.NewOutboxRepository(db.DB)
+	outboxWorkerCfg := outbox.DefaultWorkerConfig()
+	outboxWorker := outbox.NewWorker(outboxRepo, publisher, outboxWorkerCfg, logger)
+
+	// Declare topic exchange and bind queues. Routing keys match the queue
+	// names the notification-service already consumes from.
+	exchangeBindings := map[string]string{
+		utils.NOTIF_EMAIL_VERIFICATION:    utils.NOTIF_EMAIL_VERIFICATION,
+		utils.NOTIF_EMAIL_FORGOT_PASSWORD: utils.NOTIF_EMAIL_FORGOT_PASSWORD,
+		utils.NOTIF_EMAIL_CREATE_CUSTOMER: utils.NOTIF_EMAIL_CREATE_CUSTOMER,
+		utils.NOTIF_EMAIL_UPDATE_CUSTOMER: utils.NOTIF_EMAIL_UPDATE_CUSTOMER,
+		utils.PUSH_NOTIF:                  utils.PUSH_NOTIF,
 	}
-	for _, q := range queues {
-		if err := publisher.SetupQueue(q, nil); err != nil {
-			logger.Warn().Err(err).Str("queue", q).Msg("queue setup failed (consumer may create it)")
-		}
+	if err := outboxWorker.SetupExchange(connMgr, exchangeBindings); err != nil {
+		logger.Fatal().Err(err).Msg("failed to setup exchange and bindings")
+		return
 	}
 
-	eventPub := message.NewEventPublisher(publisher, logger)
+	// --- Start outbox worker goroutine ---
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var workerWg sync.WaitGroup
+	workerWg.Add(1)
+	go func() {
+		defer workerWg.Done()
+		if err := outboxWorker.Start(ctx); err != nil && err != context.Canceled {
+			logger.Error().Err(err).Msg("outbox worker exited with error")
+		}
+	}()
 
 	// --- Repositories & Services ---
 	storageHandler := storage.NewSupabase(cfg)
@@ -86,7 +104,7 @@ func RunServer() {
 	roleRepo := repository.NewRoleRepository(db.DB)
 
 	jwtService := service.NewJwtService(cfg)
-	userService := service.NewUserService(userRepo, cfg, jwtService, tokenRepo, eventPub)
+	userService := service.NewUserService(db.DB, userRepo, cfg, jwtService, tokenRepo, outboxRepo, logger)
 	roleService := service.NewRoleService(roleRepo)
 
 	// --- HTTP Server ---
@@ -122,6 +140,7 @@ func RunServer() {
 	<-quit
 
 	logger.Info().Msg("shutting down...")
+	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -129,6 +148,8 @@ func RunServer() {
 	if err := e.Shutdown(shutdownCtx); err != nil {
 		logger.Error().Err(err).Msg("http server shutdown error")
 	}
+
+	workerWg.Wait()
 
 	if err := publisher.Close(); err != nil {
 		logger.Error().Err(err).Msg("publisher close error")

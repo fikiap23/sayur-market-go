@@ -11,6 +11,7 @@ import (
 	"product-service/config"
 	"product-service/internal/adapter/handlers"
 	"product-service/internal/adapter/message"
+	"product-service/internal/adapter/outbox"
 	rmq "product-service/internal/adapter/rabbitmq"
 	"product-service/internal/adapter/repository"
 	"product-service/internal/adapter/storage"
@@ -20,6 +21,7 @@ import (
 	"github.com/go-playground/validator/v10/translations/en"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 
 	middlewareGateway "product-service/internal/middleware"
@@ -72,21 +74,42 @@ func RunServer() {
 		return
 	}
 
-	for _, q := range []string{cfg.PublisherName.ProductPublish, cfg.PublisherName.ProductDelete} {
-		if q == "" {
-			continue
-		}
-		if err := publisher.SetupQueue(q, nil); err != nil {
-			logger.Warn().Err(err).Str("queue", q).Msg("queue setup failed")
-		}
+	// --- Outbox worker setup ---
+	// The outbox worker replaces direct publish from service layer.
+	// It uses a topic exchange so consumers bind by routing key.
+	outboxWorkerCfg := outbox.DefaultWorkerConfig()
+	outboxRepo := repository.NewOutboxRepository(db.DB)
+	outboxWorker := outbox.NewWorker(outboxRepo, publisher, outboxWorkerCfg, logger)
+
+	// Declare topic exchange and bind queues for each event type.
+	// Routing keys match model.EventProduct* constants.
+	exchangeBindings := map[string]string{}
+	if cfg.PublisherName.ProductPublish != "" {
+		exchangeBindings["product.created"] = cfg.PublisherName.ProductPublish
+		exchangeBindings["product.updated"] = cfg.PublisherName.ProductPublish
+	}
+	if cfg.PublisherName.ProductDelete != "" {
+		exchangeBindings["product.deleted"] = cfg.PublisherName.ProductDelete
+	}
+	if err := outboxWorker.SetupExchange(connMgr, exchangeBindings); err != nil {
+		logger.Fatal().Err(err).Msg("failed to setup exchange and bindings")
+		return
 	}
 
-	publisherRabbitMQ := message.NewPublishRabbitMQ(
-		publisher,
-		cfg.PublisherName.ProductPublish,
-		cfg.PublisherName.ProductDelete,
-		logger,
-	)
+	// Also setup the stock update queue (published by external services).
+	if cfg.PublisherName.ProductUpdateStock != "" {
+		stockDLQ := cfg.PublisherName.ProductUpdateStock + ".dlq"
+		if err := publisher.SetupQueue(stockDLQ, nil); err != nil {
+			logger.Warn().Err(err).Str("queue", stockDLQ).Msg("stock DLQ setup failed")
+		}
+		stockArgs := amqp.Table{
+			"x-dead-letter-exchange":    "",
+			"x-dead-letter-routing-key": stockDLQ,
+		}
+		if err := publisher.SetupQueue(cfg.PublisherName.ProductUpdateStock, stockArgs); err != nil {
+			logger.Warn().Err(err).Str("queue", cfg.PublisherName.ProductUpdateStock).Msg("stock queue setup failed")
+		}
+	}
 
 	// --- Consumer setup ---
 	ctx, cancel := context.WithCancel(context.Background())
@@ -132,9 +155,10 @@ func RunServer() {
 			consOpts = append(consOpts, rmq.WithMaxRetries(cfg.RabbitMQ.MaxRetries))
 		}
 		if cfg.RabbitMQ.ProcessTimeoutSec > 0 {
-			consOpts = append(consOpts, rmq.WithProcessTimeout(time.Duration(cfg.RabbitMQ.ProcessTimeoutSec)*time.Second))
+			consOpts = append(consOpts, rmq.WithProcessTimeout(time.Duration(cfg.RabbitMQ.ProcessTimeoutSec) * time.Second))
 		}
 		consOpts = append(consOpts, rmq.WithConsumerMetrics(metrics))
+		consOpts = append(consOpts, rmq.WithDLQ(true))
 
 		c := rmq.NewConsumer(connMgr, cd.queue, cd.handler, logger, consOpts...)
 		consumerWg.Add(1)
@@ -146,6 +170,15 @@ func RunServer() {
 		}(cd.queue)
 	}
 
+	// --- Start outbox worker goroutine ---
+	consumerWg.Add(1)
+	go func() {
+		defer consumerWg.Done()
+		if err := outboxWorker.Start(ctx); err != nil && err != context.Canceled {
+			logger.Error().Err(err).Msg("outbox worker exited with error")
+		}
+	}()
+
 	// --- Repositories & Services ---
 	storageHandler := storage.NewSupabase(cfg)
 	categoryRepo := repository.NewCategoryRepository(db.DB)
@@ -153,7 +186,7 @@ func RunServer() {
 	cartRepo := repository.NewCartRedisRepository(cfg.NewRedisClient())
 
 	categoryService := service.NewCategoryService(categoryRepo)
-	productService := service.NewProductService(productRepo, publisherRabbitMQ, categoryRepo)
+	productService := service.NewProductService(db.DB, productRepo, outboxRepo, categoryRepo, logger)
 	cartService := service.NewCartService(cartRepo)
 
 	// --- HTTP Server ---
@@ -170,7 +203,7 @@ func RunServer() {
 	})
 
 	handlers.NewCategoryHandler(e, categoryService, cfg)
-	handlers.NewProductHandler(e, cfg, productService)
+	handlers.NewProductHandler(e, cfg, productService, elasticInit)
 	handlers.NewUploadImage(e, cfg, storageHandler)
 	handlers.NewCartHandler(e, cfg, cartService, productService)
 

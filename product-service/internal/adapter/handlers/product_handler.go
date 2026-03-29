@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"product-service/config"
 	"product-service/internal/adapter"
@@ -11,6 +14,7 @@ import (
 	"product-service/utils/conv"
 	"strings"
 
+	"github.com/elastic/go-elasticsearch/v7"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/labstack/gommon/log"
@@ -26,10 +30,12 @@ type ProductHandlerInterface interface {
 	GetAllHome(c echo.Context) error
 	GetAllShop(c echo.Context) error
 	GetDetailHome(c echo.Context) error
+	ReindexProducts(c echo.Context) error
 }
 
 type productHandler struct {
-	service service.ProductServiceInterface
+	service  service.ProductServiceInterface
+	esClient *elasticsearch.Client
 }
 
 func (p *productHandler) GetDetailHome(c echo.Context) error {
@@ -640,8 +646,61 @@ func (p *productHandler) GetAllAdmin(c echo.Context) error {
 	return c.JSON(http.StatusOK, resp)
 }
 
-func NewProductHandler(e *echo.Echo, cfg *config.Config, productService service.ProductServiceInterface) ProductHandlerInterface {
-	product := &productHandler{service: productService}
+// ReindexProducts fetches all active products from PostgreSQL and bulk-indexes
+// them into Elasticsearch. This is an admin-only recovery endpoint.
+func (p *productHandler) ReindexProducts(c echo.Context) error {
+	resp := response.DefaultResponse{}
+	ctx := c.Request().Context()
+
+	query := entity.QueryStringProduct{
+		Page:      1,
+		Limit:     10000,
+		OrderBy:   "id",
+		OrderType: "asc",
+		Status:    "ACTIVE",
+	}
+
+	products, _, _, err := p.service.GetAll(ctx, query)
+	if err != nil && err.Error() != "404" {
+		resp.Message = fmt.Sprintf("failed to fetch products: %v", err)
+		return c.JSON(http.StatusInternalServerError, resp)
+	}
+
+	if len(products) == 0 {
+		resp.Message = "no products to reindex"
+		resp.Data = map[string]int{"indexed": 0}
+		return c.JSON(http.StatusOK, resp)
+	}
+
+	indexed := 0
+	for _, product := range products {
+		data, err := json.Marshal(product)
+		if err != nil {
+			continue
+		}
+		res, err := p.esClient.Index(
+			"products",
+			bytes.NewReader(data),
+			p.esClient.Index.WithDocumentID(fmt.Sprintf("%d", product.ID)),
+			p.esClient.Index.WithContext(ctx),
+		)
+		if err != nil {
+			log.Errorf("[Reindex] index product %d: %v", product.ID, err)
+			continue
+		}
+		res.Body.Close()
+		if !res.IsError() {
+			indexed++
+		}
+	}
+
+	resp.Message = "reindex completed"
+	resp.Data = map[string]int{"total": len(products), "indexed": indexed}
+	return c.JSON(http.StatusOK, resp)
+}
+
+func NewProductHandler(e *echo.Echo, cfg *config.Config, productService service.ProductServiceInterface, esClient *elasticsearch.Client) ProductHandlerInterface {
+	product := &productHandler{service: productService, esClient: esClient}
 
 	e.Use(middleware.Recover())
 
@@ -657,6 +716,7 @@ func NewProductHandler(e *echo.Echo, cfg *config.Config, productService service.
 	adminGroup.GET("/products/:id", product.GetByIDAdmin)
 	adminGroup.PUT("/products/:id", product.EditAdmin)
 	adminGroup.DELETE("/products/:id", product.DeleteAdmin)
+	adminGroup.POST("/reindex-products", product.ReindexProducts)
 
 	return product
 }

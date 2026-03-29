@@ -14,6 +14,7 @@ import (
 type VerificationTokenRepositoryInterface interface {
 	CreateVerificationToken(ctx context.Context, req entity.VerificationTokenEntity) error
 	GetDataByToken(ctx context.Context, token string) (*entity.VerificationTokenEntity, error)
+	WithTx(tx *gorm.DB) VerificationTokenRepositoryInterface
 }
 
 type verificationTokenRepository struct {
@@ -65,6 +66,10 @@ func (v *verificationTokenRepository) CreateVerificationToken(ctx context.Contex
 	}
 
 	return nil
+}
+
+func (v *verificationTokenRepository) WithTx(tx *gorm.DB) VerificationTokenRepositoryInterface {
+	return &verificationTokenRepository{db: tx}
 }
 
 func NewVerificationTokenRepository(db *gorm.DB) VerificationTokenRepositoryInterface {

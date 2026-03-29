@@ -35,7 +35,7 @@ func (cfg Config) ConnectionPostgres() (*Postgres, error) {
 		return nil, err
 	}
 
-	db.AutoMigrate(&model.User{}, &model.Role{}, &model.UserRole{}, &model.VerificationToken{})
+	db.AutoMigrate(&model.User{}, &model.Role{}, &model.UserRole{}, &model.VerificationToken{}, &model.OutboxEvent{})
 	db = db.Debug()
 	sqlDB, err := db.DB()
 	if err != nil {

@@ -8,7 +8,6 @@ import (
 	"math"
 	"product-service/internal/core/domain/entity"
 	"product-service/internal/core/domain/model"
-	"strconv"
 	"strings"
 
 	"github.com/elastic/go-elasticsearch/v7"
@@ -23,6 +22,10 @@ type ProductRepositoryInterface interface {
 	Update(ctx context.Context, req entity.ProductEntity) error
 	Delete(ctx context.Context, productID int64) error
 	SearchProducts(ctx context.Context, query entity.QueryStringProduct) ([]entity.ProductEntity, int64, int64, error)
+	// WithTx returns a copy of the repository that uses the given transaction for all DB operations.
+	WithTx(tx *gorm.DB) ProductRepositoryInterface
+	// GetDB exposes the underlying *gorm.DB for transaction management.
+	GetDB() *gorm.DB
 }
 
 type productRepository struct {
@@ -31,6 +34,7 @@ type productRepository struct {
 }
 
 // Delete implements ProductRepositoryInterface.
+// ES sync is now handled by the outbox worker + consumer, not inline.
 func (p *productRepository) Delete(ctx context.Context, productID int64) error {
 	modelProduct := model.Product{}
 
@@ -46,19 +50,6 @@ func (p *productRepository) Delete(ctx context.Context, productID int64) error {
 		log.Errorf("[ProductRepository-2] Delete: %v", err)
 		return err
 	}
-
-	res, err := p.esClient.Delete(
-		"products",
-		strconv.Itoa(int(productID)),
-		p.esClient.Delete.WithRefresh("true"),
-	)
-	if err != nil {
-		log.Errorf("[ProductRepository-3] Delete: %v", err)
-		return err
-	}
-
-	defer res.Body.Close()
-	log.Infof("[ProductRepository-4] Delete Product Elasticsearch: %d", productID)
 
 	return nil
 }
@@ -237,8 +228,18 @@ func (p *productRepository) GetByID(ctx context.Context, productID int64) (*enti
 	}, nil
 }
 
-// GetAll implements ProductRepositoryInterface.
+// SearchProducts queries Elasticsearch first. If ES is unavailable or returns
+// an error, it automatically falls back to PostgreSQL so the caller never panics.
 func (p *productRepository) SearchProducts(ctx context.Context, query entity.QueryStringProduct) ([]entity.ProductEntity, int64, int64, error) {
+	products, totalData, totalPage, err := p.searchES(ctx, query)
+	if err != nil {
+		log.Printf("[SearchProducts] ES failed (%v), falling back to PostgreSQL", err)
+		return p.GetAll(ctx, query)
+	}
+	return products, totalData, totalPage, nil
+}
+
+func (p *productRepository) searchES(ctx context.Context, query entity.QueryStringProduct) ([]entity.ProductEntity, int64, int64, error) {
 	var mainQueries []string
 	var filterQueries []string
 	from := (query.Page - 1) * query.Limit
@@ -248,13 +249,11 @@ func (p *productRepository) SearchProducts(ctx context.Context, query entity.Que
 		sortField = query.OrderBy
 	}
 
-	// Menentukan urutan sorting (asc atau desc)
 	sortOrder := "asc"
 	if query.OrderType == "desc" {
 		sortOrder = "desc"
 	}
 
-	// Menyusun bagian sort query
 	sortQuery := fmt.Sprintf(`{ "%s": "%s" }`, sortField, sortOrder)
 
 	if query.CategorySlug != "" {
@@ -269,7 +268,6 @@ func (p *productRepository) SearchProducts(ctx context.Context, query entity.Que
 		mainQueries = append(mainQueries, fmt.Sprintf(`{ "multi_match": { "query": "%s", "fields": ["name", "description", "category_name"] } }`, query.Search))
 	}
 
-	// Query Elasticsearch dengan filtering dan pagination
 	mainQuery := fmt.Sprintf(`{
 		"from": %d,
 		"size": %d,
@@ -278,7 +276,7 @@ func (p *productRepository) SearchProducts(ctx context.Context, query entity.Que
 				"must": [
 					%s
 				],
-				"filter": [ 
+				"filter": [
 					%s
 				]
 			}
@@ -288,45 +286,38 @@ func (p *productRepository) SearchProducts(ctx context.Context, query entity.Que
 		]
 	}`, from, query.Limit, strings.Join(mainQueries, ","), strings.Join(filterQueries, ","), sortQuery)
 
-	// Query Elasticsearch dengan filtering dan pagination
-	// Kirim query ke Elasticsearch
 	res, err := p.esClient.Search(
 		p.esClient.Search.WithContext(ctx),
 		p.esClient.Search.WithIndex("products"),
 		p.esClient.Search.WithBody(strings.NewReader(mainQuery)),
 		p.esClient.Search.WithPretty(),
 	)
-
 	if err != nil {
-		log.Printf("Error searching Elasticsearch: %s", err)
-		return nil, 0, 0, err
+		return nil, 0, 0, fmt.Errorf("es search request: %w", err)
 	}
 	defer res.Body.Close()
 
-	// Decode response
 	var result map[string]interface{}
 	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
-		log.Printf("Error decoding response: %s", err)
-		return nil, 0, 0, err
+		return nil, 0, 0, fmt.Errorf("es decode response: %w", err)
 	}
 	if res.IsError() {
-		return nil, 0, 0, fmt.Errorf("elasticsearch search: %v", result["error"])
+		errDetail, _ := result["error"]
+		return nil, 0, 0, fmt.Errorf("es search error: %v", errDetail)
 	}
 
 	hitsRoot, ok := result["hits"].(map[string]interface{})
 	if !ok || hitsRoot == nil {
-		return nil, 0, 0, fmt.Errorf("elasticsearch: missing hits in response")
+		return nil, 0, 0, fmt.Errorf("es: missing hits in response")
 	}
 
 	totalData := esHitsTotal(hitsRoot)
 
-	// Hitung total halaman
 	totalPage := 0
 	if query.Limit > 0 {
 		totalPage = int(math.Ceil(float64(totalData) / float64(query.Limit)))
 	}
 
-	// Parsing hasil pencarian ke struct domain.Product
 	products := []entity.ProductEntity{}
 	hits, ok := hitsRoot["hits"].([]interface{})
 	if ok {
@@ -335,10 +326,18 @@ func (p *productRepository) SearchProducts(ctx context.Context, query entity.Que
 			if !ok {
 				continue
 			}
-			source := hm["_source"]
-			data, _ := json.Marshal(source)
+			source, ok := hm["_source"]
+			if !ok {
+				continue
+			}
+			data, err := json.Marshal(source)
+			if err != nil {
+				continue
+			}
 			var product entity.ProductEntity
-			json.Unmarshal(data, &product)
+			if err := json.Unmarshal(data, &product); err != nil {
+				continue
+			}
 			products = append(products, product)
 		}
 	}
@@ -430,6 +429,14 @@ func (p *productRepository) GetAll(ctx context.Context, query entity.QueryString
 	}
 
 	return respProducts, countData, int64(totalPage), nil
+}
+
+func (p *productRepository) WithTx(tx *gorm.DB) ProductRepositoryInterface {
+	return &productRepository{db: tx, esClient: p.esClient}
+}
+
+func (p *productRepository) GetDB() *gorm.DB {
+	return p.db
 }
 
 func NewProductRepository(db *gorm.DB, es *elasticsearch.Client) ProductRepositoryInterface {

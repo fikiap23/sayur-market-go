@@ -80,6 +80,7 @@ func RunServer() {
 			consOpts = append(consOpts, rmq.WithProcessTimeout(time.Duration(cfg.RabbitMQ.ProcessTimeoutSec)*time.Second))
 		}
 		consOpts = append(consOpts, rmq.WithConsumerMetrics(metrics))
+		consOpts = append(consOpts, rmq.WithDLQ(true))
 
 		consumer := rmq.NewConsumer(connMgr, queue, notifHandler, logger, consOpts...)
 

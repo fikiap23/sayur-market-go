@@ -27,6 +27,9 @@ type UserRepositoryInterface interface {
 	CreateCustomer(ctx context.Context, req entity.UserEntity) (int64, error)
 	UpdateCustomer(ctx context.Context, req entity.UserEntity) error
 	DeleteCustomer(ctx context.Context, customerID int64) error
+
+	WithTx(tx *gorm.DB) UserRepositoryInterface
+	GetDB() *gorm.DB
 }
 
 type userRepository struct {
@@ -398,6 +401,14 @@ func (u *userRepository) GetUserByEmail(ctx context.Context, email string) (*ent
 		Photo:      modelUser.Photo,
 		IsVerified: modelUser.IsVerified,
 	}, nil
+}
+
+func (u *userRepository) WithTx(tx *gorm.DB) UserRepositoryInterface {
+	return &userRepository{db: tx}
+}
+
+func (u *userRepository) GetDB() *gorm.DB {
+	return u.db
 }
 
 func NewUserRepository(db *gorm.DB) UserRepositoryInterface {
