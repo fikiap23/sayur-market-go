@@ -64,6 +64,7 @@ func (c *categoryService) DeleteCategory(ctx context.Context, categoryID int64) 
 // EditCategory implements CategoryServiceInterface.
 func (c *categoryService) EditCategory(ctx context.Context, req entity.CategoryEntity) error {
 	slug := conv.GenerateSlug(req.Name)
+
 	result, err := c.repo.GetByID(ctx, req.ID)
 	if err != nil {
 		log.Errorf("[CategoryService-1] EditCategory: %v", err)
@@ -72,10 +73,12 @@ func (c *categoryService) EditCategory(ctx context.Context, req entity.CategoryE
 
 	if slug != result.Slug {
 		resSlug, err := c.repo.GetBySlug(ctx, slug)
-		if err != nil {
+
+		if err != nil && err.Error() != "404" {
 			log.Errorf("[CategoryService-2] EditCategory: %v", err)
 			return err
 		}
+
 		if resSlug != nil {
 			err = errors.New("409")
 			log.Infof("[CategoryService-3] EditCategory: Category already exists")
@@ -84,6 +87,7 @@ func (c *categoryService) EditCategory(ctx context.Context, req entity.CategoryE
 	}
 
 	req.Slug = slug
+
 	err = c.repo.EditCategory(ctx, req)
 	if err != nil {
 		log.Errorf("[CategoryService-4] EditCategory: %v", err)
