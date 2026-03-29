@@ -15,22 +15,29 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/labstack/gommon/log"
 
+	"product-service/internal/adapter/handlers"
+	"product-service/internal/adapter/repository"
+	"product-service/internal/core/service"
 	middlewareGateway "product-service/internal/middleware"
 )
 
 func RunServer() {
 	cfg := config.NewConfig()
-	// db, err := cfg.ConnectionPostgres()
-	// if err != nil {
-	// 	log.Fatalf("[RunServer-1] %v", err)
-	// 	return
-	// }
+	db, err := cfg.ConnectionPostgres()
+	if err != nil {
+		log.Fatalf("[RunServer-1] %v", err)
+		return
+	}
 
 	// elasticInit, err := cfg.InitElasticsearch()
 	// if err != nil {
 	// 	log.Fatalf("[RunServer-2] %v", err)
 	// 	return
 	// }
+
+	categoryRepo := repository.NewCategoryRepository(db.DB)
+
+	categoryService := service.NewCategoryService(categoryRepo)
 
 	e := echo.New()
 	e.Use(middleware.CORS())
@@ -44,12 +51,14 @@ func RunServer() {
 		return c.String(200, "OK")
 	})
 
+	handlers.NewCategoryHandler(e, categoryService, cfg)
+
 	go func() {
 		if cfg.App.AppPort == "" {
 			cfg.App.AppPort = os.Getenv("APP_PORT")
 		}
 
-		err := e.Start(":" + cfg.App.AppPort)
+		err = e.Start(":" + cfg.App.AppPort)
 		if err != nil {
 			log.Fatalf("[RunServer-2] %v", err)
 		}

@@ -8,7 +8,7 @@ type ProductEntity struct {
 	ParentID     *int64          `json:"parent_id"`
 	Name         string          `json:"name"`
 	Image        string          `json:"image"`
-	Description  string          `json:"description"`
+	Description  *string         `json:"description"`
 	RegulerPrice int64           `json:"reguler_price"`
 	SalePrice    int64           `json:"sale_price"`
 	Unit         string          `json:"unit"`
@@ -17,7 +17,7 @@ type ProductEntity struct {
 	Variant      int             `json:"variant"`
 	Status       string          `json:"status"`
 	CategoryName *string         `json:"category_name"`
-	Children     []ProductEntity `json:"children,omitempty"`
+	Child        []ProductEntity `json:"child,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 }
 

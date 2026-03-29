@@ -5,9 +5,9 @@ type CategoryEntity struct {
 	ParentID    *int64           `json:"parent_id"`
 	Name        string           `json:"name"`
 	Icon        string           `json:"icon"`
-	Status      bool             `json:"status"`
+	Status      string           `json:"status"`
 	Slug        string           `json:"slug"`
-	Description string           `json:"description"`
+	Description *string          `json:"description"`
 	Products    []ProductEntity  `json:"products,omitempty"`
 	Children    []CategoryEntity `json:"children,omitempty"`
 }

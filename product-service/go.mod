@@ -35,6 +35,7 @@ require (
 	github.com/go-playground/locales v0.14.1
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/go-redis/redis/v8 v8.11.5
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/labstack/echo/v4 v4.15.1
 	github.com/labstack/gommon v0.4.2
@@ -51,6 +52,7 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/streadway/amqp v1.1.0
 	github.com/subosito/gotenv v1.6.0 // indirect
+	github.com/supabase-community/storage-go v0.8.1
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
