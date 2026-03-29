@@ -27,3 +27,10 @@ func Int64PointerToInt64(num *int64) int64 {
 	}
 	return 0
 }
+
+func StringPointerToString(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return ""
+}

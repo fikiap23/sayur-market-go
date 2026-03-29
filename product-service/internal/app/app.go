@@ -16,7 +16,9 @@ import (
 	"github.com/labstack/gommon/log"
 
 	"product-service/internal/adapter/handlers"
+	"product-service/internal/adapter/message"
 	"product-service/internal/adapter/repository"
+	"product-service/internal/adapter/storage"
 	"product-service/internal/core/service"
 	middlewareGateway "product-service/internal/middleware"
 )
@@ -29,15 +31,20 @@ func RunServer() {
 		return
 	}
 
-	// elasticInit, err := cfg.InitElasticsearch()
-	// if err != nil {
-	// 	log.Fatalf("[RunServer-2] %v", err)
-	// 	return
-	// }
+	elasticInit, err := cfg.InitElasticsearch()
+	if err != nil {
+		log.Fatalf("[RunServer-2] %v", err)
+		return
+	}
+
+	storageHandler := storage.NewSupabase(cfg)
+	publisherRabbitMQ := message.NewPublishRabbitMQ(cfg)
 
 	categoryRepo := repository.NewCategoryRepository(db.DB)
+	productRepo := repository.NewProductRepository(db.DB, elasticInit)
 
 	categoryService := service.NewCategoryService(categoryRepo)
+	productService := service.NewProductService(productRepo, publisherRabbitMQ, categoryRepo)
 
 	e := echo.New()
 	e.Use(middleware.CORS())
@@ -52,6 +59,8 @@ func RunServer() {
 	})
 
 	handlers.NewCategoryHandler(e, categoryService, cfg)
+	handlers.NewProductHandler(e, cfg, productService)
+	handlers.NewUploadImage(e, cfg, storageHandler)
 
 	go func() {
 		if cfg.App.AppPort == "" {
