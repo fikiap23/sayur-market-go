@@ -28,6 +28,7 @@ func (cfg Config) ConnectionPostgres() (*Postgres, error) {
 	}
 
 	db.AutoMigrate(&model.Category{}, &model.Product{})
+	db = db.Debug()
 
 	sqlDB, err := db.DB()
 	if err != nil {
