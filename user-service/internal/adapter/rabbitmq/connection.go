@@ -1,8 +1,11 @@
 package rabbitmq
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
@@ -65,6 +68,37 @@ func (cm *ConnectionManager) OpenChannel() (*amqp.Channel, *amqp.Connection, err
 	}
 
 	return ch, cm.conn, nil
+}
+
+// WaitForReady blocks until a connection can be established or ctx expires.
+// Use at startup to avoid fail-fast when the broker is still booting.
+func (cm *ConnectionManager) WaitForReady(ctx context.Context, maxAttempts int, baseDelay time.Duration) error {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		ch, _, err := cm.OpenChannel()
+		if err == nil {
+			_ = ch.Close()
+			cm.logger.Info().Int("attempts", attempt).Msg("rabbitmq ready")
+			return nil
+		}
+
+		delay := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+		if delay > 30*time.Second {
+			delay = 30 * time.Second
+		}
+
+		cm.logger.Warn().Err(err).
+			Int("attempt", attempt).
+			Int("max_attempts", maxAttempts).
+			Dur("retry_in", delay).
+			Msg("rabbitmq not ready, retrying...")
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled waiting for rabbitmq: %w", ctx.Err())
+		case <-time.After(delay):
+		}
+	}
+	return fmt.Errorf("rabbitmq not ready after %d attempts", maxAttempts)
 }
 
 func (cm *ConnectionManager) Close() error {

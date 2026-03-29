@@ -37,6 +37,14 @@ func RunServer() {
 	// --- RabbitMQ setup ---
 	connMgr := rmq.NewConnectionManager(cfg.RabbitMQURL(), logger)
 
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	if err := connMgr.WaitForReady(startupCtx, 10, 2*time.Second); err != nil {
+		startupCancel()
+		logger.Fatal().Err(err).Msg("rabbitmq not reachable at startup")
+		return
+	}
+	startupCancel()
+
 	metrics := rmq.NewMetrics()
 	var pubOpts []rmq.PublisherOption
 	if cfg.RabbitMQ.PublisherPoolSize > 0 {
