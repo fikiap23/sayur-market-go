@@ -89,6 +89,9 @@ services:
   redis:
     image: redis:7.2.7-alpine3.21
     restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
     ports:
       - '6379:6379'
     healthcheck:
@@ -129,6 +132,9 @@ services:
     environment:
       - discovery.type=single-node
       - 'ES_JAVA_OPTS=-Xms512m -Xmx512m'
+    volumes:
+      # Persist indices; without this, data is lost when the container is recreated.
+      - elasticsearch_data:/usr/share/elasticsearch/data
     ports:
       - '9200:9200'
       - '9300:9300'
@@ -238,3 +244,5 @@ volumes:
   # postgres_order_data:
   # postgres_payment_data:
   postgres_notification_data:
+  elasticsearch_data:
+  redis_data:

@@ -309,12 +309,16 @@ func (p *productRepository) SearchProducts(ctx context.Context, query entity.Que
 		log.Printf("Error decoding response: %s", err)
 		return nil, 0, 0, err
 	}
-
-	// Ambil total data
-	totalData := 0
-	if hitsTotal, found := result["hits"].(map[string]interface{})["total"].(map[string]interface{}); found {
-		totalData = int(hitsTotal["value"].(float64))
+	if res.IsError() {
+		return nil, 0, 0, fmt.Errorf("elasticsearch search: %v", result["error"])
 	}
+
+	hitsRoot, ok := result["hits"].(map[string]interface{})
+	if !ok || hitsRoot == nil {
+		return nil, 0, 0, fmt.Errorf("elasticsearch: missing hits in response")
+	}
+
+	totalData := esHitsTotal(hitsRoot)
 
 	// Hitung total halaman
 	totalPage := 0
@@ -324,10 +328,14 @@ func (p *productRepository) SearchProducts(ctx context.Context, query entity.Que
 
 	// Parsing hasil pencarian ke struct domain.Product
 	products := []entity.ProductEntity{}
-	hits, found := result["hits"].(map[string]interface{})["hits"].([]interface{})
-	if found {
+	hits, ok := hitsRoot["hits"].([]interface{})
+	if ok {
 		for _, hit := range hits {
-			source := hit.(map[string]interface{})["_source"]
+			hm, ok := hit.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			source := hm["_source"]
 			data, _ := json.Marshal(source)
 			var product entity.ProductEntity
 			json.Unmarshal(data, &product)
@@ -336,6 +344,26 @@ func (p *productRepository) SearchProducts(ctx context.Context, query entity.Que
 	}
 
 	return products, int64(totalData), int64(totalPage), nil
+}
+
+// esHitsTotal reads hit count from ES search response (ES 6: number; ES 7+: { "value", "relation" }).
+func esHitsTotal(hits map[string]interface{}) int {
+	if hits == nil {
+		return 0
+	}
+	t, ok := hits["total"]
+	if !ok || t == nil {
+		return 0
+	}
+	switch v := t.(type) {
+	case float64:
+		return int(v)
+	case map[string]interface{}:
+		if val, ok := v["value"].(float64); ok {
+			return int(val)
+		}
+	}
+	return 0
 }
 
 // GetAll implements ProductRepositoryInterface.
