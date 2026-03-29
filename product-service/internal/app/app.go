@@ -150,9 +150,11 @@ func RunServer() {
 	storageHandler := storage.NewSupabase(cfg)
 	categoryRepo := repository.NewCategoryRepository(db.DB)
 	productRepo := repository.NewProductRepository(db.DB, elasticInit)
+	cartRepo := repository.NewCartRedisRepository(cfg.NewRedisClient())
 
 	categoryService := service.NewCategoryService(categoryRepo)
 	productService := service.NewProductService(productRepo, publisherRabbitMQ, categoryRepo)
+	cartService := service.NewCartService(cartRepo)
 
 	// --- HTTP Server ---
 	e := echo.New()
@@ -170,6 +172,7 @@ func RunServer() {
 	handlers.NewCategoryHandler(e, categoryService, cfg)
 	handlers.NewProductHandler(e, cfg, productService)
 	handlers.NewUploadImage(e, cfg, storageHandler)
+	handlers.NewCartHandler(e, cfg, cartService, productService)
 
 	go func() {
 		port := cfg.App.AppPort
