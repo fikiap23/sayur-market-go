@@ -6,168 +6,92 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"product-service/config"
+
 	"product-service/internal/core/domain/entity"
 
-	"github.com/labstack/gommon/log"
+	"github.com/elastic/go-elasticsearch/v7"
+	"github.com/rs/zerolog"
 )
 
-func StartDeleteOrderConsumer() {
-	conn, err := config.NewConfig().NewRabbitMQ()
-	if err != nil {
-		log.Errorf("[StartDeleteOrderConsumer-1] Failed to connect to RabbitMQ: %v", err)
-	}
-
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Errorf("[StartDeleteOrderConsumer-2] Failed to open a channel: %v", err)
-	}
-
-	defer ch.Close()
-
-	q, err := ch.QueueDeclare(
-		config.NewConfig().PublisherName.ProductDelete,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatalf("[StartDeleteOrderConsumer-3] Failed to declare queue: %v", err)
-	}
-
-	msgs, err := ch.Consume(
-		q.Name,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatalf("[StartDeleteOrderConsumer-4] Failed to register consumer: %v", err)
-	}
-
-	log.Info("RabbitMQ Consumer started...")
-
-	esClient, err := config.NewConfig().InitElasticsearch()
-	if err != nil {
-		log.Errorf("[StartDeleteOrderConsumer-5] Failed initialize Elasticsearch client: %v", err)
-	}
-
-	forever := make(chan bool)
-	go func() {
-		for d := range msgs {
-			var data map[string]string
-			err := json.Unmarshal(d.Body, &data)
-			if err != nil {
-				log.Errorf("[StartDeleteOrderConsumer-6] Error decoding message: %v", err)
-				continue
-			}
-
-			productID := data["ProductID"]
-
-			res, err := esClient.Delete("products", productID)
-			if err != nil {
-				log.Errorf("[StartDeleteOrderConsumer-8] Error indexing to Elasticsearch: %v", err)
-				continue
-			}
-			defer res.Body.Close()
-		}
-	}()
-
-	log.Infof("[StartDeleteOrderConsumer-10] Waiting for messages. To exit press CTRL+C")
-	<-forever
+// ESIndexHandler indexes products into Elasticsearch when consumed from the
+// product-publish queue. Implements rabbitmq.MessageHandler.
+type ESIndexHandler struct {
+	esClient *elasticsearch.Client
+	logger   zerolog.Logger
 }
 
-func StartConsumer() {
-	conn, err := config.NewConfig().NewRabbitMQ()
-	if err != nil {
-		log.Errorf("[StartConsumer-1] Failed to connect to RabbitMQ: %v", err)
+func NewESIndexHandler(esClient *elasticsearch.Client, logger zerolog.Logger) *ESIndexHandler {
+	return &ESIndexHandler{
+		esClient: esClient,
+		logger:   logger.With().Str("component", "es_index_handler").Logger(),
+	}
+}
+
+func (h *ESIndexHandler) Handle(ctx context.Context, body []byte) error {
+	var product entity.ProductEntity
+	if err := json.Unmarshal(body, &product); err != nil {
+		return fmt.Errorf("unmarshal product: %w", err)
 	}
 
-	defer conn.Close()
-
-	ch, err := conn.Channel()
+	productJSON, err := json.Marshal(product)
 	if err != nil {
-		log.Errorf("[StartConsumer-2] Failed to open a channel: %v", err)
+		return fmt.Errorf("marshal product for ES: %w", err)
 	}
 
-	defer ch.Close()
-
-	q, err := ch.QueueDeclare(
-		config.NewConfig().PublisherName.ProductPublish,
-		true,
-		false,
-		false,
-		false,
-		nil,
+	res, err := h.esClient.Index(
+		"products",
+		bytes.NewReader(productJSON),
+		h.esClient.Index.WithDocumentID(fmt.Sprintf("%d", product.ID)),
+		h.esClient.Index.WithContext(ctx),
+		h.esClient.Index.WithRefresh("true"),
 	)
 	if err != nil {
-		log.Fatalf("[StartConsumer-3] Failed to declare queue: %v", err)
+		return fmt.Errorf("index to ES: %w", err)
+	}
+	defer res.Body.Close()
+
+	resBody, _ := io.ReadAll(res.Body)
+	if res.IsError() {
+		return fmt.Errorf("ES index error [%s]: %s", res.Status(), string(resBody))
 	}
 
-	msgs, err := ch.Consume(
-		q.Name,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
+	h.logger.Debug().Int64("product_id", product.ID).Msg("product indexed in ES")
+	return nil
+}
+
+// ESDeleteHandler removes products from Elasticsearch when consumed from the
+// product-delete queue. Implements rabbitmq.MessageHandler.
+type ESDeleteHandler struct {
+	esClient *elasticsearch.Client
+	logger   zerolog.Logger
+}
+
+func NewESDeleteHandler(esClient *elasticsearch.Client, logger zerolog.Logger) *ESDeleteHandler {
+	return &ESDeleteHandler{
+		esClient: esClient,
+		logger:   logger.With().Str("component", "es_delete_handler").Logger(),
+	}
+}
+
+func (h *ESDeleteHandler) Handle(ctx context.Context, body []byte) error {
+	var data map[string]string
+	if err := json.Unmarshal(body, &data); err != nil {
+		return fmt.Errorf("unmarshal delete msg: %w", err)
+	}
+
+	productID := data["ProductID"]
+	if productID == "" {
+		return fmt.Errorf("missing ProductID in message")
+	}
+
+	res, err := h.esClient.Delete("products", productID,
+		h.esClient.Delete.WithContext(ctx),
 	)
 	if err != nil {
-		log.Fatalf("[StartConsumer-4] Failed to register consumer: %v", err)
+		return fmt.Errorf("delete from ES: %w", err)
 	}
+	defer res.Body.Close()
 
-	log.Info("RabbitMQ Consumer started...")
-
-	esClient, err := config.NewConfig().InitElasticsearch()
-	if err != nil {
-		log.Errorf("[StartConsumer-5] Failed initialize Elasticsearch client: %v", err)
-	}
-
-	forever := make(chan bool)
-	go func() {
-		for d := range msgs {
-			var product entity.ProductEntity
-			err := json.Unmarshal(d.Body, &product)
-			if err != nil {
-				log.Errorf("[StartConsumer-6] Error decoding message: %v", err)
-				continue
-			}
-
-			// Convert product struct ke JSON
-			productJSON, err := json.Marshal(product)
-			if err != nil {
-				log.Errorf("[StartConsumer-7] Error encoding product to JSON: %v", err)
-				continue
-			}
-
-			// Indexing ke Elasticsearch
-			res, err := esClient.Index(
-				"products",                   // Nama index di Elasticsearch
-				bytes.NewReader(productJSON), // Data JSON
-				esClient.Index.WithDocumentID(fmt.Sprintf("%d", product.ID)), // ID dokumen
-				esClient.Index.WithContext(context.Background()),
-				esClient.Index.WithRefresh("true"),
-			)
-			if err != nil {
-				log.Errorf("[StartConsumer-8] Error indexing to Elasticsearch: %v", err)
-				continue
-			}
-			defer res.Body.Close()
-
-			body, _ := io.ReadAll(res.Body)
-
-			log.Infof("[StartConsumer-9] Product %d berhasil diindex ke Elasticsearch %v", product.ID, string(body))
-		}
-	}()
-
-	log.Infof("[StartConsumer-10] Waiting for messages. To exit press CTRL+C")
-	<-forever
+	h.logger.Debug().Str("product_id", productID).Msg("product deleted from ES")
+	return nil
 }

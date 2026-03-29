@@ -11,7 +11,7 @@ import (
 	"notification-service/config"
 	"notification-service/internal/adapter/handlers"
 	"notification-service/internal/adapter/message"
-	"notification-service/internal/adapter/rabbitmq"
+	rmq "notification-service/internal/adapter/rabbitmq"
 	"notification-service/internal/adapter/repository"
 	"notification-service/internal/core/service"
 	"notification-service/utils"
@@ -33,13 +33,16 @@ func RunServer() {
 		return
 	}
 
+	// --- Dependencies ---
 	notifRepo := repository.NewNotificationRepository(db.DB)
 	notifService := service.NewNotificationService(notifRepo)
 	emailMessage := message.NewMessageEmail(cfg)
 
-	notifHandler := rabbitmq.NewNotificationHandler(emailMessage, notifRepo, notifService, logger)
+	notifHandler := rmq.NewNotificationHandler(emailMessage, notifRepo, notifService, logger)
 
-	connMgr := rabbitmq.NewConnectionManager(cfg, logger)
+	// --- RabbitMQ setup ---
+	connMgr := rmq.NewConnectionManager(cfg.RabbitMQURL(), logger)
+	metrics := rmq.NewMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -54,12 +57,22 @@ func RunServer() {
 
 	var consumerWg sync.WaitGroup
 	for _, queue := range queues {
-		consumer := rabbitmq.NewConsumer(connMgr, queue, notifHandler, logger,
-			rabbitmq.WithWorkerPoolSize(cfg.RabbitMQ.WorkerPoolSize),
-			rabbitmq.WithPrefetchCount(cfg.RabbitMQ.PrefetchCount),
-			rabbitmq.WithMaxRetries(cfg.RabbitMQ.MaxRetries),
-			rabbitmq.WithProcessTimeout(time.Duration(cfg.RabbitMQ.ProcessTimeout)*time.Second),
-		)
+		var consOpts []rmq.ConsumerOption
+		if cfg.RabbitMQ.WorkerPoolSize > 0 {
+			consOpts = append(consOpts, rmq.WithWorkerPoolSize(cfg.RabbitMQ.WorkerPoolSize))
+		}
+		if cfg.RabbitMQ.PrefetchCount > 0 {
+			consOpts = append(consOpts, rmq.WithPrefetchCount(cfg.RabbitMQ.PrefetchCount))
+		}
+		if cfg.RabbitMQ.MaxRetries > 0 {
+			consOpts = append(consOpts, rmq.WithMaxRetries(cfg.RabbitMQ.MaxRetries))
+		}
+		if cfg.RabbitMQ.ProcessTimeoutSec > 0 {
+			consOpts = append(consOpts, rmq.WithProcessTimeout(time.Duration(cfg.RabbitMQ.ProcessTimeoutSec)*time.Second))
+		}
+		consOpts = append(consOpts, rmq.WithConsumerMetrics(metrics))
+
+		consumer := rmq.NewConsumer(connMgr, queue, notifHandler, logger, consOpts...)
 
 		consumerWg.Add(1)
 		go func(q string) {
@@ -70,6 +83,7 @@ func RunServer() {
 		}(queue)
 	}
 
+	// --- HTTP Server ---
 	e := echo.New()
 	e.Use(middleware.CORS())
 	e.Use(middlewareGateway.GatewayValidationMiddleware())
@@ -86,6 +100,7 @@ func RunServer() {
 		}
 	}()
 
+	// --- Graceful shutdown ---
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
@@ -105,6 +120,14 @@ func RunServer() {
 	if err := connMgr.Close(); err != nil {
 		logger.Error().Err(err).Msg("rabbitmq connection close error")
 	}
+
+	snap := metrics.Snapshot()
+	logger.Info().
+		Int64("consumed", snap.ConsumeCount).
+		Int64("acks", snap.AckCount).
+		Int64("nacks", snap.NackCount).
+		Int64("retries", snap.RetryCount).
+		Msg("final metrics")
 
 	logger.Info().Msg("shutdown complete")
 }

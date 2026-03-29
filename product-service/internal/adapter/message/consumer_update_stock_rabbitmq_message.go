@@ -1,91 +1,56 @@
 package message
 
 import (
+	"context"
 	"encoding/json"
-	"product-service/config"
+	"fmt"
+
 	"product-service/internal/core/domain/entity"
 	"product-service/internal/core/domain/model"
 
-	"github.com/labstack/gommon/log"
+	"github.com/rs/zerolog"
+	"gorm.io/gorm"
 )
 
-// StartUpdateStockConsumer implements consumerUpdateStockInterface.
-func StartUpdateStockConsumer() {
-	db, err := config.NewConfig().ConnectionPostgres()
-	if err != nil {
-		log.Errorf("[StartUpdateStockConsumer-1] Failed to connect to PostgreSQL: %v", err)
-		return
+// UpdateStockHandler processes stock-update messages from the order service.
+// Implements rabbitmq.MessageHandler.
+type UpdateStockHandler struct {
+	db     *gorm.DB
+	logger zerolog.Logger
+}
+
+func NewUpdateStockHandler(db *gorm.DB, logger zerolog.Logger) *UpdateStockHandler {
+	return &UpdateStockHandler{
+		db:     db,
+		logger: logger.With().Str("component", "update_stock_handler").Logger(),
+	}
+}
+
+func (h *UpdateStockHandler) Handle(_ context.Context, body []byte) error {
+	var orderItem entity.PublishOrderItemEntity
+	if err := json.Unmarshal(body, &orderItem); err != nil {
+		return fmt.Errorf("unmarshal order item: %w", err)
 	}
 
-	conn, err := config.NewConfig().NewRabbitMQ()
-	if err != nil {
-		log.Errorf("[StartUpdateStockConsumer-1] Failed to connect to RabbitMQ: %v", err)
-		return
+	var product model.Product
+	if err := h.db.First(&product, orderItem.ProductID).Error; err != nil {
+		return fmt.Errorf("find product %d: %w", orderItem.ProductID, err)
 	}
 
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Errorf("[StartUpdateStockConsumer-2] Failed to open a channel: %v", err)
-		return
+	if product.Stock < int(orderItem.Quantity) {
+		return fmt.Errorf("insufficient stock for product %d: have %d, need %d",
+			orderItem.ProductID, product.Stock, orderItem.Quantity)
 	}
 
-	defer ch.Close()
-
-	q, err := ch.QueueDeclare(
-		config.NewConfig().PublisherName.ProductUpdateStock,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatalf("[StartConsumer-3] Failed to declare queue: %v", err)
-		return
+	product.Stock -= int(orderItem.Quantity)
+	if err := h.db.Save(&product).Error; err != nil {
+		return fmt.Errorf("update stock for product %d: %w", orderItem.ProductID, err)
 	}
 
-	msgs, err := ch.Consume(
-		q.Name,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatalf("[StartConsumer-4] Failed to register consumer: %v", err)
-		return
-	}
-
-	log.Info("RabbitMQ Consumer started...")
-
-	for msg := range msgs {
-		var orderItem entity.PublishOrderItemEntity
-		if err := json.Unmarshal(msg.Body, &orderItem); err != nil {
-			log.Errorf("[StartUpdateStockConsumer-5] Failed to decode message: %v", err)
-			continue
-		}
-
-		// Simulasi update stok
-		var product model.Product
-		if err := db.DB.First(&product, orderItem.ProductID).Error; err != nil {
-			log.Errorf("[StartUpdateStockConsumer-6] Failed to find product: %v", err)
-			continue
-		}
-
-		if product.Stock < int(orderItem.Quantity) {
-			log.Errorf("[StartUpdateStockConsumer-7] Stock not enough")
-			continue
-		}
-
-		product.Stock -= int(orderItem.Quantity)
-		if err := db.DB.Save(&product).Error; err != nil {
-			log.Errorf("[StartUpdateStockConsumer-8] Failed to update stock: %v", err)
-			continue
-		}
-		log.Printf("Mengurangi stok produk %d sebanyak %d", orderItem.ProductID, orderItem.Quantity)
-	}
+	h.logger.Info().
+		Int64("product_id", orderItem.ProductID).
+		Int64("quantity", orderItem.Quantity).
+		Int("remaining_stock", product.Stock).
+		Msg("stock updated")
+	return nil
 }

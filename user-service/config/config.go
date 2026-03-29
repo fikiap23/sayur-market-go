@@ -28,6 +28,10 @@ type RabbitMQ struct {
 	Port     string `json:"port"`
 	User     string `json:"user"`
 	Password string `json:"password"`
+
+	PublisherPoolSize   int `json:"publisher_pool_size"`
+	PublisherMaxRetries int `json:"publisher_max_retries"`
+	PublishTimeoutSec   int `json:"publish_timeout_sec"`
 }
 
 type Supabase struct {
@@ -71,10 +75,13 @@ func NewConfig() *Config {
 			DBMaxIdle: viper.GetInt("DATABASE_MAX_IDLE_CONNECTION"),
 		},
 		RabbitMQ: RabbitMQ{
-			Host:     viper.GetString("RABBITMQ_HOST"),
-			Port:     viper.GetString("RABBITMQ_PORT"),
-			User:     viper.GetString("RABBITMQ_USER"),
-			Password: viper.GetString("RABBITMQ_PASSWORD"),
+			Host:                viper.GetString("RABBITMQ_HOST"),
+			Port:                viper.GetString("RABBITMQ_PORT"),
+			User:                viper.GetString("RABBITMQ_USER"),
+			Password:            viper.GetString("RABBITMQ_PASSWORD"),
+			PublisherPoolSize:   viper.GetInt("RABBITMQ_PUBLISHER_POOL_SIZE"),
+			PublisherMaxRetries: viper.GetInt("RABBITMQ_PUBLISHER_MAX_RETRIES"),
+			PublishTimeoutSec:   viper.GetInt("RABBITMQ_PUBLISH_TIMEOUT_SEC"),
 		},
 		Storage: Supabase{
 			URL:    viper.GetString("SUPABASE_STORAGE_URL"),

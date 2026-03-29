@@ -39,6 +39,7 @@ type userService struct {
 	cfg        *config.Config
 	jwtService JwtServiceInterface
 	repoToken  repository.VerificationTokenRepositoryInterface
+	eventPub   message.EventPublisher
 }
 
 // DeleteCustomer implements UserServiceInterface.
@@ -68,7 +69,7 @@ func (u *userService) UpdateCustomer(ctx context.Context, req entity.UserEntity)
 
 	if passwordNoencrypt != "" {
 		messageparam := fmt.Sprintf("You're account has been updated. Please login use: \n Email: %s\nPassword: %s", req.Email, passwordNoencrypt)
-		go message.PublishMessage(req.ID,
+		go u.eventPub.PublishNotification(context.Background(), req.ID,
 			req.Email,
 			messageparam,
 			utils.NOTIF_EMAIL_UPDATE_CUSTOMER,
@@ -95,7 +96,7 @@ func (u *userService) CreateCustomer(ctx context.Context, req entity.UserEntity)
 	}
 
 	messageparam := fmt.Sprintf("You have been registered in Sayur Project. Please login use: \n Email: %s\nPassword: %s", req.Email, passwordNoEncrypt)
-	go message.PublishMessage(userID,
+	go u.eventPub.PublishNotification(context.Background(), userID,
 		req.Email,
 		messageparam,
 		utils.NOTIF_EMAIL_CREATE_CUSTOMER,
@@ -227,7 +228,7 @@ func (u *userService) ForgotPassword(ctx context.Context, req entity.UserEntity)
 
 	urlForgot := fmt.Sprintf("%s/auth/update-password?token=%s", u.cfg.App.UrlFrontFE, token)
 	messageparam := fmt.Sprintf("Please click link below for reset password: %v", urlForgot)
-	go message.PublishMessage(user.ID,
+	go u.eventPub.PublishNotification(context.Background(), user.ID,
 		req.Email,
 		messageparam,
 		utils.NOTIF_EMAIL_FORGOT_PASSWORD,
@@ -255,7 +256,7 @@ func (u *userService) CreateUserAccount(ctx context.Context, req entity.UserEnti
 
 	verifyURL := fmt.Sprintf("%s/auth/verify-account?token=%s", u.cfg.App.UrlFrontFE, req.Token)
 	verifyMsg := fmt.Sprintf("Please verify your account by clicking the link: %s", verifyURL)
-	go message.PublishMessage(
+	go u.eventPub.PublishNotification(context.Background(),
 		userID,
 		req.Email,
 		verifyMsg,
@@ -312,11 +313,12 @@ func (u *userService) SignIn(ctx context.Context, req entity.UserEntity) (*entit
 	return user, token, nil
 }
 
-func NewUserService(repo repository.UserRepositoryInterface, cfg *config.Config, jwtService JwtServiceInterface, repoToken repository.VerificationTokenRepositoryInterface) UserServiceInterface {
+func NewUserService(repo repository.UserRepositoryInterface, cfg *config.Config, jwtService JwtServiceInterface, repoToken repository.VerificationTokenRepositoryInterface, eventPub message.EventPublisher) UserServiceInterface {
 	return &userService{
 		repo:       repo,
 		cfg:        cfg,
 		jwtService: jwtService,
 		repoToken:  repoToken,
+		eventPub:   eventPub,
 	}
 }

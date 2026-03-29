@@ -25,14 +25,19 @@ type Redis struct {
 }
 
 type RabbitMQ struct {
-	Host           string `json:"host"`
-	Port           string `json:"port"`
-	User           string `json:"user"`
-	Password       string `json:"password"`
-	WorkerPoolSize int    `json:"worker_pool_size"`
-	PrefetchCount  int    `json:"prefetch_count"`
-	MaxRetries     int    `json:"max_retries"`
-	ProcessTimeout int    `json:"process_timeout_sec"`
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+	User     string `json:"user"`
+	Password string `json:"password"`
+
+	PublisherPoolSize   int `json:"publisher_pool_size"`
+	PublisherMaxRetries int `json:"publisher_max_retries"`
+	PublishTimeoutSec   int `json:"publish_timeout_sec"`
+
+	WorkerPoolSize    int `json:"worker_pool_size"`
+	PrefetchCount     int `json:"prefetch_count"`
+	MaxRetries        int `json:"max_retries"`
+	ProcessTimeoutSec int `json:"process_timeout_sec"`
 }
 
 type EmailConfig struct {
@@ -70,14 +75,17 @@ func NewConfig() *Config {
 			DBMaxIdle: viper.GetInt("DATABASE_MAX_IDLE_CONNECTION"),
 		},
 		RabbitMQ: RabbitMQ{
-			Host:           viper.GetString("RABBITMQ_HOST"),
-			Port:           viper.GetString("RABBITMQ_PORT"),
-			User:           viper.GetString("RABBITMQ_USER"),
-			Password:       viper.GetString("RABBITMQ_PASSWORD"),
-			WorkerPoolSize: viper.GetInt("RABBITMQ_WORKER_POOL_SIZE"),
-			PrefetchCount:  viper.GetInt("RABBITMQ_PREFETCH_COUNT"),
-			MaxRetries:     viper.GetInt("RABBITMQ_MAX_RETRIES"),
-			ProcessTimeout: viper.GetInt("RABBITMQ_PROCESS_TIMEOUT_SEC"),
+			Host:                viper.GetString("RABBITMQ_HOST"),
+			Port:                viper.GetString("RABBITMQ_PORT"),
+			User:                viper.GetString("RABBITMQ_USER"),
+			Password:            viper.GetString("RABBITMQ_PASSWORD"),
+			PublisherPoolSize:   viper.GetInt("RABBITMQ_PUBLISHER_POOL_SIZE"),
+			PublisherMaxRetries: viper.GetInt("RABBITMQ_PUBLISHER_MAX_RETRIES"),
+			PublishTimeoutSec:   viper.GetInt("RABBITMQ_PUBLISH_TIMEOUT_SEC"),
+			WorkerPoolSize:      viper.GetInt("RABBITMQ_WORKER_POOL_SIZE"),
+			PrefetchCount:       viper.GetInt("RABBITMQ_PREFETCH_COUNT"),
+			MaxRetries:          viper.GetInt("RABBITMQ_MAX_RETRIES"),
+			ProcessTimeoutSec:   viper.GetInt("RABBITMQ_PROCESS_TIMEOUT_SEC"),
 		},
 		EmailConf: EmailConfig{
 			Host:     viper.GetString("EMAIL_HOST"),

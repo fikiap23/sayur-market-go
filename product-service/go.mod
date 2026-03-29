@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/go-playground/universal-translator v0.18.1
+	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/spf13/viper v1.19.0
 )
 
@@ -51,7 +52,6 @@ require (
 	github.com/spf13/cast v1.6.0 // indirect
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9 // indirect
-	github.com/streadway/amqp v1.1.0
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/supabase-community/storage-go v0.8.1
 	go.uber.org/atomic v1.9.0 // indirect

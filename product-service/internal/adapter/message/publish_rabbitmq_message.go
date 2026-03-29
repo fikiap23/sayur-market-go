@@ -1,122 +1,63 @@
 package message
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"product-service/config"
+
+	"product-service/internal/adapter/rabbitmq"
 	"product-service/internal/core/domain/entity"
 
-	"github.com/labstack/gommon/log"
-	"github.com/streadway/amqp"
+	"github.com/rs/zerolog"
 )
 
+// PublishRabbitMQInterface is the contract used by the service layer.
 type PublishRabbitMQInterface interface {
 	PublishProductToQueue(product entity.ProductEntity) error
 	DeleteProductFromQueue(productID int64) error
 }
 
-type PublishRabbitMQ struct {
-	cfg *config.Config
+type publishRabbitMQ struct {
+	publisher         *rabbitmq.Publisher
+	publishQueueName  string
+	deleteQueueName   string
+	logger            zerolog.Logger
 }
 
-func NewPublishRabbitMQ(cfg *config.Config) PublishRabbitMQInterface {
-	return &PublishRabbitMQ{cfg: cfg}
+func NewPublishRabbitMQ(publisher *rabbitmq.Publisher, publishQueue, deleteQueue string, logger zerolog.Logger) PublishRabbitMQInterface {
+	return &publishRabbitMQ{
+		publisher:        publisher,
+		publishQueueName: publishQueue,
+		deleteQueueName:  deleteQueue,
+		logger:           logger.With().Str("component", "product_publisher").Logger(),
+	}
 }
 
-// DeleteProductFromQueue implements PublishRabbitMQInterface.
-func (p *PublishRabbitMQ) DeleteProductFromQueue(productID int64) error {
-	conn, err := p.cfg.NewRabbitMQ()
+func (p *publishRabbitMQ) PublishProductToQueue(product entity.ProductEntity) error {
+	body, err := json.Marshal(product)
 	if err != nil {
-		log.Errorf("[DeleteProductFromQueue-1] Failed to connect to RabbitMQ: %v", err)
+		return fmt.Errorf("marshal product: %w", err)
+	}
+
+	if err := p.publisher.Publish(context.Background(), p.publishQueueName, body); err != nil {
+		p.logger.Error().Err(err).Int64("product_id", product.ID).Msg("failed to publish product")
 		return err
 	}
 
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Errorf("[DeleteProductFromQueue-2] Failed to open a channel: %v", err)
-		return err
-	}
-
-	defer ch.Close()
-	q, err := ch.QueueDeclare(
-		p.cfg.PublisherName.ProductDelete,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Errorf("[DeleteProductFromQueue-3] Failed to declare queue: %v", err)
-		return err
-	}
-
-	data, _ := json.Marshal(map[string]string{"ProductID": fmt.Sprintf("%d", productID)})
-	err = ch.Publish(
-		"",
-		q.Name,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        data,
-		},
-	)
-	if err != nil {
-		log.Errorf("[DeleteProductFromQueue-4] Failed to publish message: %v", err)
-		return err
-	}
-
+	p.logger.Debug().Int64("product_id", product.ID).Msg("product published")
 	return nil
 }
 
-func (p *PublishRabbitMQ) PublishProductToQueue(product entity.ProductEntity) error {
-	conn, err := p.cfg.NewRabbitMQ()
-	if err != nil {
-		log.Errorf("[PublishProductToQueue-1] Failed to connect to RabbitMQ: %v", err)
+func (p *publishRabbitMQ) DeleteProductFromQueue(productID int64) error {
+	body, _ := json.Marshal(map[string]string{
+		"ProductID": fmt.Sprintf("%d", productID),
+	})
+
+	if err := p.publisher.Publish(context.Background(), p.deleteQueueName, body); err != nil {
+		p.logger.Error().Err(err).Int64("product_id", productID).Msg("failed to publish product delete")
 		return err
 	}
 
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Errorf("[PublishProductToQueue-2] Failed to open a channel: %v", err)
-		return err
-	}
-
-	defer ch.Close()
-
-	q, err := ch.QueueDeclare(
-		p.cfg.PublisherName.ProductPublish,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Errorf("[PublishProductToQueue-3] Failed to declare queue: %v", err)
-		return err
-	}
-
-	data, _ := json.Marshal(product)
-	err = ch.Publish(
-		"",
-		q.Name,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        data,
-		},
-	)
-	if err != nil {
-		log.Errorf("[PublishProductToQueue-4] Failed to publish message: %v", err)
-		return err
-	}
-
+	p.logger.Debug().Int64("product_id", productID).Msg("product delete published")
 	return nil
 }
