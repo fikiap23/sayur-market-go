@@ -14,6 +14,8 @@ import (
 )
 
 type OrderRepositoryInterface interface {
+	WithTx(tx *gorm.DB) OrderRepositoryInterface
+
 	GetAll(ctx context.Context, queryString entity.QueryStringEntity) ([]entity.OrderEntity, int64, int64, error)
 	GetByID(ctx context.Context, orderID int64) (*entity.OrderEntity, error)
 	CreateOrder(ctx context.Context, req entity.OrderEntity) (int64, error)
@@ -25,6 +27,11 @@ type OrderRepositoryInterface interface {
 
 type orderRepository struct {
 	db *gorm.DB
+}
+
+// WithTx returns a repository that runs all operations on the given transaction.
+func (o *orderRepository) WithTx(tx *gorm.DB) OrderRepositoryInterface {
+	return &orderRepository{db: tx}
 }
 
 func statusEqual(a, b string) bool {

@@ -2,34 +2,122 @@ package app
 
 import (
 	"context"
-	"order-service/config"
-	"order-service/utils/validator"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
+
+	"order-service/config"
+	"order-service/internal/adapter/handlers"
+	httpclient "order-service/internal/adapter/http_client"
+	"order-service/internal/adapter/outbox"
+	rmq "order-service/internal/adapter/rabbitmq"
+	"order-service/internal/adapter/repository"
+	"order-service/internal/core/domain/model"
+	"order-service/internal/core/service"
+	"order-service/utils"
+	"order-service/utils/validator"
 
 	"github.com/go-playground/validator/v10/translations/en"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/labstack/gommon/log"
+	"github.com/rs/zerolog"
 
 	middlewareGateway "order-service/internal/middleware"
 )
 
 func RunServer() {
 	cfg := config.NewConfig()
-	// db, err := cfg.ConnectionPostgres()
-	// if err != nil {
-	// 	log.Fatalf("[RunServer-1] %v", err)
-	// 	return
-	// }
+	logger := newLogger(cfg.App.AppEnv)
 
-	// elasticInit, err := cfg.InitElasticsearch()
-	// if err != nil {
-	// 	log.Fatalf("[RunServer-2] %v", err)
-	// 	return
-	// }
+	db, err := cfg.ConnectionPostgres()
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to connect to database")
+		return
+	}
+
+	elasticInit, err := cfg.InitElasticsearch()
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to connect to elasticsearch")
+		return
+	}
+
+	connMgr := rmq.NewConnectionManager(cfg.RabbitMQURL(), logger)
+
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	if err := connMgr.WaitForReady(startupCtx, 10, 2*time.Second); err != nil {
+		startupCancel()
+		logger.Fatal().Err(err).Msg("rabbitmq not reachable at startup")
+		return
+	}
+	startupCancel()
+
+	metrics := rmq.NewMetrics()
+
+	var pubOpts []rmq.PublisherOption
+	if cfg.RabbitMQ.PublisherPoolSize > 0 {
+		pubOpts = append(pubOpts, rmq.WithPoolSize(cfg.RabbitMQ.PublisherPoolSize))
+	}
+	if cfg.RabbitMQ.PublisherMaxRetries > 0 {
+		pubOpts = append(pubOpts, rmq.WithPublishMaxRetries(cfg.RabbitMQ.PublisherMaxRetries))
+	}
+	if cfg.RabbitMQ.PublishTimeoutSec > 0 {
+		pubOpts = append(pubOpts, rmq.WithPublishTimeout(time.Duration(cfg.RabbitMQ.PublishTimeoutSec)*time.Second))
+	}
+	pubOpts = append(pubOpts, rmq.WithPublisherMetrics(metrics))
+
+	publisher, err := rmq.NewPublisher(connMgr, logger, pubOpts...)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to initialize rabbitmq publisher")
+		return
+	}
+
+	outboxWorkerCfg := outbox.DefaultWorkerConfig()
+	outboxRepo := repository.NewOutboxRepository(db.DB)
+	outboxWorker := outbox.NewWorker(outboxRepo, publisher, outboxWorkerCfg, logger)
+
+	exchangeBindings := map[string]string{}
+	if cfg.PublisherName.OrderPublish != "" {
+		exchangeBindings[model.EventOrderCreated] = cfg.PublisherName.OrderPublish
+	}
+	if cfg.PublisherName.PublisherDeleteOrder != "" {
+		exchangeBindings[model.EventOrderDeleted] = cfg.PublisherName.PublisherDeleteOrder
+	}
+	if cfg.PublisherName.ProductUpdateStock != "" {
+		exchangeBindings[model.EventOrderStockUpdate] = cfg.PublisherName.ProductUpdateStock
+	}
+	if cfg.PublisherName.EmailUpdateStatus != "" {
+		exchangeBindings[model.EventNotificationOrderEmail] = cfg.PublisherName.EmailUpdateStatus
+	}
+	exchangeBindings[model.EventNotificationOrderPush] = utils.PUSH_NOTIF
+	if cfg.PublisherName.PublisherUpdateStatus != "" {
+		exchangeBindings[model.EventOrderStatusES] = cfg.PublisherName.PublisherUpdateStatus
+	}
+
+	if err := outboxWorker.SetupExchange(connMgr, exchangeBindings); err != nil {
+		logger.Fatal().Err(err).Msg("failed to setup exchange and bindings")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := outboxWorker.Start(ctx); err != nil && err != context.Canceled {
+			logger.Error().Err(err).Msg("outbox worker exited with error")
+		}
+	}()
+
+	orderRepo := repository.NewOrderRepository(db.DB)
+	elasticRepo := repository.NewElasticRepository(elasticInit)
+	httpClient := httpclient.NewHttpClient(cfg)
+
+	orderService := service.NewOrderService(db.DB, orderRepo, outboxRepo, cfg, httpClient, elasticRepo, logger)
 
 	e := echo.New()
 	e.Use(middleware.CORS())
@@ -43,28 +131,58 @@ func RunServer() {
 		return c.String(200, "OK")
 	})
 
-	// handlers.NewOrderHandler(orderService, e, cfg)
+	handlers.NewOrderHandler(orderService, e, cfg)
 
 	go func() {
-		if cfg.App.AppPort == "" {
-			cfg.App.AppPort = os.Getenv("APP_PORT")
+		port := cfg.App.AppPort
+		if port == "" {
+			port = os.Getenv("APP_PORT")
 		}
-
-		err := e.Start(":" + cfg.App.AppPort)
-		if err != nil {
-			log.Fatalf("[RunServer-2] %v", err)
+		if err := e.Start(":" + port); err != nil {
+			logger.Info().Err(err).Msg("http server stopped")
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt)
-	signal.Notify(quit, syscall.SIGTERM)
-
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	log.Print("[RunServer-3] Shutting down server of 5 second...")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	logger.Info().Msg("shutting down...")
+	cancel()
 
-	e.Shutdown(ctx)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		logger.Error().Err(err).Msg("http server shutdown error")
+	}
+
+	wg.Wait()
+
+	if err := publisher.Close(); err != nil {
+		logger.Error().Err(err).Msg("publisher close error")
+	}
+	if err := connMgr.Close(); err != nil {
+		logger.Error().Err(err).Msg("rabbitmq connection close error")
+	}
+
+	snap := metrics.Snapshot()
+	logger.Info().
+		Int64("published", snap.PublishCount).
+		Int64("publish_errors", snap.PublishErrorCount).
+		Int64("consumed", snap.ConsumeCount).
+		Int64("acks", snap.AckCount).
+		Int64("nacks", snap.NackCount).
+		Int64("retries", snap.RetryCount).
+		Msg("final metrics")
+
+	logger.Info().Msg("shutdown complete")
+}
+
+func newLogger(env string) zerolog.Logger {
+	if env == "development" {
+		return zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).
+			With().Timestamp().Caller().Logger()
+	}
+	return zerolog.New(os.Stdout).With().Timestamp().Logger()
 }
