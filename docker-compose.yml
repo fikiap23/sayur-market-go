@@ -35,22 +35,22 @@ services:
       interval: 10s
       retries: 10
 
-  # order_db:
-  #     image: postgres:16
-  #     restart: unless-stopped
-  #     environment:
-  #         POSTGRES_USER: postgres
-  #         POSTGRES_PASSWORD: lokal
-  #         POSTGRES_DB: order_service
-  #     volumes:
-  #         - postgres_order_data:/var/lib/postgresql/data
-  #     ports:
-  #         - "5434:5432"
-  #     healthcheck:
-  #         test: ["CMD", "pg_isready", "-U postgres"]
-  #         timeout: 5s
-  #         interval: 10s
-  #         retries: 10
+  order_db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: lokal
+      POSTGRES_DB: order_service
+    volumes:
+      - postgres_order_data:/var/lib/postgresql/data
+    ports:
+      - '5434:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d order_service']
+      timeout: 5s
+      interval: 10s
+      retries: 10
 
   # payment_db:
   #     image: postgres:16
@@ -182,27 +182,27 @@ services:
       elasticsearch:
         condition: service_healthy
 
-  # order-service:
-  #     build:
-  #         context: ./order-service
-  #         dockerfile: Dockerfile
-  #     env_file:
-  #         - ./order-service/.env
-  #     ports:
-  #         - "8083:8083"
-  #     depends_on:
-  #         order_db:
-  #             condition: service_healthy
-  #         redis:
-  #             condition: service_healthy
-  #         rabbitmq:
-  #             condition: service_healthy
-  #         elasticsearch:
-  #             condition: service_healthy
-  #         product-service:
-  #             condition: service_started
-  #         user-service:
-  #             condition: service_started
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    env_file:
+      - ./order-service/.env
+    ports:
+      - '8083:8083'
+    depends_on:
+      order_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+      user-service:
+        condition: service_started
 
   # payment-service:
   #     build:
@@ -241,7 +241,7 @@ services:
 volumes:
   postgres_user_data:
   postgres_product_data:
-  # postgres_order_data:
+  postgres_order_data:
   # postgres_payment_data:
   postgres_notification_data:
   elasticsearch_data:
