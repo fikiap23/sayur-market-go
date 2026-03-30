@@ -26,14 +26,14 @@ func NewUpdateStockHandler(db *gorm.DB, logger zerolog.Logger) *UpdateStockHandl
 	}
 }
 
-func (h *UpdateStockHandler) Handle(_ context.Context, body []byte) error {
+func (h *UpdateStockHandler) Handle(ctx context.Context, body []byte) error {
 	var orderItem entity.PublishOrderItemEntity
 	if err := json.Unmarshal(body, &orderItem); err != nil {
 		return fmt.Errorf("unmarshal order item: %w", err)
 	}
 
 	var product model.Product
-	if err := h.db.First(&product, orderItem.ProductID).Error; err != nil {
+	if err := h.db.WithContext(ctx).First(&product, orderItem.ProductID).Error; err != nil {
 		return fmt.Errorf("find product %d: %w", orderItem.ProductID, err)
 	}
 
@@ -43,7 +43,7 @@ func (h *UpdateStockHandler) Handle(_ context.Context, body []byte) error {
 	}
 
 	product.Stock -= int(orderItem.Quantity)
-	if err := h.db.Save(&product).Error; err != nil {
+	if err := h.db.WithContext(ctx).Save(&product).Error; err != nil {
 		return fmt.Errorf("update stock for product %d: %w", orderItem.ProductID, err)
 	}
 
