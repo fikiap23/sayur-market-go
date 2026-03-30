@@ -205,6 +205,7 @@ func (p *productRepository) GetByID(ctx context.Context, productID int64) (*enti
 			CategoryName: &val.Category.Name,
 			Child:        childEntities,
 			CreatedAt:    val.CreatedAt,
+			UpdatedAt:    val.UpdatedAt,
 		})
 	}
 
@@ -225,6 +226,7 @@ func (p *productRepository) GetByID(ctx context.Context, productID int64) (*enti
 		CategoryName: &modelProduct.Category.Name,
 		Child:        childEntities,
 		CreatedAt:    modelProduct.CreatedAt,
+		UpdatedAt:    modelProduct.UpdatedAt,
 	}, nil
 }
 
@@ -425,6 +427,7 @@ func (p *productRepository) GetAll(ctx context.Context, query entity.QueryString
 			Status:       val.Status,
 			CategoryName: &val.Category.Name,
 			CreatedAt:    val.CreatedAt,
+			UpdatedAt:    val.UpdatedAt,
 		})
 	}
 

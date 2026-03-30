@@ -16,8 +16,8 @@ import (
 )
 
 // ESIndexHandler indexes products into Elasticsearch. It is idempotent:
-// if a document with the same ID already exists with a newer or equal
-// created_at timestamp, the update is skipped to handle out-of-order events.
+// if an existing document has a newer "version" (max of created_at / updated_at)
+// than the incoming event, the update is skipped to handle out-of-order events.
 type ESIndexHandler struct {
 	esClient *elasticsearch.Client
 	logger   zerolog.Logger
@@ -38,14 +38,15 @@ func (h *ESIndexHandler) Handle(ctx context.Context, body []byte) error {
 
 	docID := fmt.Sprintf("%d", product.ID)
 
-	// Check for out-of-order: if an existing doc has a newer timestamp, skip.
-	existing, err := h.getExistingTimestamp(ctx, docID)
-	if err == nil && existing != nil && !existing.IsZero() {
-		if !product.CreatedAt.IsZero() && product.CreatedAt.Before(*existing) {
+	incomingVer := product.EffectiveVersionTime()
+	// Check for out-of-order: if an existing doc has a newer version time, skip.
+	existingVer, err := h.getExistingVersionTime(ctx, docID)
+	if err == nil && existingVer != nil && !existingVer.IsZero() && !incomingVer.IsZero() {
+		if incomingVer.Before(*existingVer) {
 			h.logger.Info().
 				Int64("product_id", product.ID).
-				Time("existing_ts", *existing).
-				Time("incoming_ts", product.CreatedAt).
+				Time("existing_version_ts", *existingVer).
+				Time("incoming_version_ts", incomingVer).
 				Msg("skipping out-of-order event, existing doc is newer")
 			return nil
 		}
@@ -79,12 +80,12 @@ func (h *ESIndexHandler) Handle(ctx context.Context, body []byte) error {
 	return nil
 }
 
-// getExistingTimestamp retrieves the created_at field of an existing ES document.
+// getExistingVersionTime returns max(created_at, updated_at) from an existing ES document.
 // Returns nil if the document does not exist.
-func (h *ESIndexHandler) getExistingTimestamp(ctx context.Context, docID string) (*time.Time, error) {
+func (h *ESIndexHandler) getExistingVersionTime(ctx context.Context, docID string) (*time.Time, error) {
 	res, err := h.esClient.Get("products", docID,
 		h.esClient.Get.WithContext(ctx),
-		h.esClient.Get.WithSourceIncludes("created_at"),
+		h.esClient.Get.WithSourceIncludes("created_at", "updated_at"),
 	)
 	if err != nil {
 		return nil, err
@@ -100,13 +101,18 @@ func (h *ESIndexHandler) getExistingTimestamp(ctx context.Context, docID string)
 
 	var result struct {
 		Source struct {
-			CreatedAt time.Time `json:"created_at"`
+			CreatedAt time.Time  `json:"created_at"`
+			UpdatedAt *time.Time `json:"updated_at"`
 		} `json:"_source"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
 		return nil, err
 	}
-	return &result.Source.CreatedAt, nil
+	t := result.Source.CreatedAt
+	if result.Source.UpdatedAt != nil && !result.Source.UpdatedAt.IsZero() && result.Source.UpdatedAt.After(t) {
+		t = *result.Source.UpdatedAt
+	}
+	return &t, nil
 }
 
 // ESDeleteHandler removes products from Elasticsearch. It is idempotent:
