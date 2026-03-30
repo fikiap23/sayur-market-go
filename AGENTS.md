@@ -1,7 +1,8 @@
+# AGENTS.md - Micro Sayur Development Guide
+
 ## Project Overview
 
 Micro Sayur is a Go-based microservices project for managing an online vegetable store. It consists of multiple services:
-
 - **user-service** (Go 1.25)
 - **product-service** (Go 1.24)
 - **notification-service** (Go 1.21)
@@ -86,7 +87,6 @@ cd notification-service && go build -o bin/notification-service main.go
 ### Project Structure
 
 Follow the hexagonal architecture pattern:
-
 ```
 internal/
   adapter/          # Driving (handlers) and driven (repositories) adapters
@@ -121,7 +121,6 @@ database/
 ### Imports
 
 Group imports in the following order:
-
 1. Standard library
 2. External packages (github.com, etc.)
 3. Internal packages
@@ -133,11 +132,11 @@ import (
     "errors"
     "fmt"
     "time"
-
+    
     "user-service/config"
     "user-service/internal/adapter/repository"
     "user-service/internal/core/domain/entity"
-
+    
     "github.com/google/uuid"
     "github.com/rs/zerolog"
     "gorm.io/gorm"
@@ -205,15 +204,15 @@ Use GORM transactions for atomic operations:
 ```go
 return u.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
     txRepo := u.repo.WithTx(tx)
-
+    
     if err := txRepo.CreateCustomer(ctx, req); err != nil {
         return err
     }
-
+    
     if err := u.insertNotifOutbox(tx, userID, req.Email, msg, utils.NOTIF_EMAIL_CREATE_CUSTOMER, "Account Exists"); err != nil {
         return err
     }
-
+    
     return nil
 })
 ```
