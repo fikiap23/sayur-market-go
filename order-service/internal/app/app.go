@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"order-service/internal/adapter/message"
 	"os"
 	"os/signal"
 	"sync"
@@ -104,6 +105,64 @@ func RunServer() {
 	defer cancel()
 
 	var wg sync.WaitGroup
+
+	type consumerDef struct {
+		queue   string
+		handler rmq.MessageHandler
+	}
+
+	var consumers []consumerDef
+	if cfg.PublisherName.OrderPublish != "" {
+		consumers = append(consumers, consumerDef{
+			queue:   cfg.PublisherName.OrderPublish,
+			handler: message.NewOrderESIndexHandler(elasticInit, logger),
+		})
+	}
+	if cfg.PublisherName.PublisherPaymentSuccess != "" {
+		consumers = append(consumers, consumerDef{
+			queue:   cfg.PublisherName.PublisherPaymentSuccess,
+			handler: message.NewOrderPaymentSuccessHandler(elasticInit, logger),
+		})
+	}
+	if cfg.PublisherName.PublisherUpdateStatus != "" {
+		consumers = append(consumers, consumerDef{
+			queue:   cfg.PublisherName.PublisherUpdateStatus,
+			handler: message.NewOrderUpdateStatusHandler(elasticInit, logger),
+		})
+	}
+	if cfg.PublisherName.PublisherDeleteOrder != "" {
+		consumers = append(consumers, consumerDef{
+			queue:   cfg.PublisherName.PublisherDeleteOrder,
+			handler: message.NewOrderESDeleteHandler(elasticInit, logger),
+		})
+	}
+
+	for _, cd := range consumers {
+		var consOpts []rmq.ConsumerOption
+		if cfg.RabbitMQ.WorkerPoolSize > 0 {
+			consOpts = append(consOpts, rmq.WithWorkerPoolSize(cfg.RabbitMQ.WorkerPoolSize))
+		}
+		if cfg.RabbitMQ.PrefetchCount > 0 {
+			consOpts = append(consOpts, rmq.WithPrefetchCount(cfg.RabbitMQ.PrefetchCount))
+		}
+		if cfg.RabbitMQ.MaxRetries > 0 {
+			consOpts = append(consOpts, rmq.WithMaxRetries(cfg.RabbitMQ.MaxRetries))
+		}
+		if cfg.RabbitMQ.ProcessTimeoutSec > 0 {
+			consOpts = append(consOpts, rmq.WithProcessTimeout(time.Duration(cfg.RabbitMQ.ProcessTimeoutSec)*time.Second))
+		}
+		consOpts = append(consOpts, rmq.WithConsumerMetrics(metrics))
+		consOpts = append(consOpts, rmq.WithDLQ(true))
+
+		c := rmq.NewConsumer(connMgr, cd.queue, cd.handler, logger, consOpts...)
+		wg.Add(1)
+		go func(q string) {
+			defer wg.Done()
+			if err := c.Start(ctx); err != nil && err != context.Canceled {
+				logger.Error().Err(err).Str("queue", q).Msg("consumer exited with error")
+			}
+		}(cd.queue)
+	}
 
 	wg.Add(1)
 	go func() {
