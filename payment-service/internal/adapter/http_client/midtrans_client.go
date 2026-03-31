@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"errors"
 	"payment-service/config"
 
 	"github.com/labstack/gommon/log"
@@ -18,8 +19,12 @@ type midtransClient struct {
 
 // CreateTransaction implements MidtransClientInterface.
 func (m *midtransClient) CreateTransaction(orderID string, amount int64, customerName string, customerEmail string) (string, error) {
+	if m.cfg.Midtrans.ServerKey == "" {
+		return "", errors.New("midtrans server key is empty")
+	}
+
 	midtrans.ServerKey = m.cfg.Midtrans.ServerKey
-	midtrans.Environment = midtrans.EnvironmentType(m.cfg.Midtrans.Environment)
+	midtrans.Environment = resolveMidtransEnvironment(m.cfg.Midtrans.Environment)
 
 	snapReq := &snap.Request{
 		TransactionDetails: midtrans.TransactionDetails{
@@ -43,4 +48,11 @@ func (m *midtransClient) CreateTransaction(orderID string, amount int64, custome
 
 func NewMidtransClient(cfg *config.Config) MidtransClientInterface {
 	return &midtransClient{cfg: cfg}
+}
+
+func resolveMidtransEnvironment(env int) midtrans.EnvironmentType {
+	if env == 1 {
+		return midtrans.Production
+	}
+	return midtrans.Sandbox
 }
