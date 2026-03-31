@@ -19,6 +19,7 @@ import (
 	"github.com/go-playground/validator/v10/translations/en"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 
 	middlewareGateway "payment-service/internal/middleware"
@@ -71,7 +72,15 @@ func RunServer() {
 	}
 
 	if cfg.PublisherName.PaymentSuccess != "" {
-		if err := publisher.SetupQueue(cfg.PublisherName.PaymentSuccess, nil); err != nil {
+		paymentDLQ := cfg.PublisherName.PaymentSuccess + ".dlq"
+		if err := publisher.SetupQueue(paymentDLQ, nil); err != nil {
+			logger.Warn().Err(err).Str("queue", paymentDLQ).Msg("payment success DLQ setup failed")
+		}
+		paymentArgs := amqp.Table{
+			"x-dead-letter-exchange":    "",
+			"x-dead-letter-routing-key": paymentDLQ,
+		}
+		if err := publisher.SetupQueue(cfg.PublisherName.PaymentSuccess, paymentArgs); err != nil {
 			logger.Warn().Err(err).Str("queue", cfg.PublisherName.PaymentSuccess).Msg("payment success queue setup failed")
 		}
 	}
