@@ -305,3 +305,48 @@ cp user-service/.env.example user-service/.env
 ### Docker Development
 
 Use the provided `docker-compose.yml` for running all infrastructure services (PostgreSQL, RabbitMQ, Redis, Elasticsearch).
+
+## Payment Service – Midtrans Webhook Setup
+
+### Endpoint yang dipakai
+
+- **Method**: `POST`
+- **Path**: `/payments/webhook`
+- **Service**: `payment-service` (default port `8084`)
+
+Handler ini diregistrasi di `payment-service` lewat:
+
+```go
+e.POST("/payments/webhook", paymentHandler.MidtranswebHookHandler)
+```
+
+### Konfigurasi environment
+
+Di `.env` / `.env.example` `payment-service`:
+
+```env
+MIDTRANS_SERVER_KEY=SB-Mid-server-xxxx        # ganti dengan server key kamu
+MIDTRANS_ENVIRONMENT=0                        # 0 = sandbox, 1 = production
+```
+
+Pastikan `MIDTRANS_ENVIRONMENT` diset sesuai mode yang kamu pakai:
+
+- `0` → Sandbox (testing)
+- `1` → Production (real payment)
+
+### Mendaftarkan webhook di Midtrans Dashboard
+
+1. Jalankan `payment-service` (misalnya via `make up` atau `cd payment-service && go run main.go`).
+2. Jika akses dari internet/public:
+   - Gunakan tunneling seperti `ngrok http 8084`.
+   - Catat URL publik yang diberikan ngrok, misalnya `https://abcd1234.ngrok.io`.
+3. Buka **Midtrans Dashboard** → **Settings** → **Configuration**.
+4. Isi **Payment Notification URL** dengan:
+
+   - `https://abcd1234.ngrok.io/payments/webhook` (untuk lokal via ngrok), atau
+   - `https://api.your-domain.com/payments/webhook` (untuk environment deploy).
+
+5. Simpan konfigurasi lalu lakukan transaksi test di sandbox untuk memastikan:
+   - Midtrans mengirim notification ke `/payments/webhook`.
+   - Status payment di database dan downstream service (order-service) ikut ter-update.
+
