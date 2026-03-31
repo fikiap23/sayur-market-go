@@ -52,22 +52,22 @@ services:
       interval: 10s
       retries: 10
 
-  # payment_db:
-  #     image: postgres:16
-  #     environment:
-  #         POSTGRES_USER: postgres
-  #         POSTGRES_PASSWORD: lokal
-  #         POSTGRES_DB: payment_service
-  #     restart: unless-stopped
-  #     volumes:
-  #         - postgres_payment_data:/var/lib/postgresql/data
-  #     ports:
-  #         - "5435:5432"
-  #     healthcheck:
-  #         test: ["CMD", "pg_isready", "-U postgres"]
-  #         timeout: 5s
-  #         interval: 10s
-  #         retries: 10
+  payment_db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: lokal
+      POSTGRES_DB: payment_service
+    restart: unless-stopped
+    volumes:
+      - postgres_payment_data:/var/lib/postgresql/data
+    ports:
+      - '5435:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d payment_service']
+      timeout: 5s
+      interval: 10s
+      retries: 10
 
   notification_db:
     image: postgres:16
@@ -204,23 +204,23 @@ services:
       user-service:
         condition: service_started
 
-  # payment-service:
-  #     build:
-  #         context: ./payment-service
-  #         dockerfile: Dockerfile
-  #     env_file:
-  #         - ./payment-service/.env
-  #     ports:
-  #         - "8084:8084"
-  #     depends_on:
-  #         payment_db:
-  #             condition: service_healthy
-  #         redis:
-  #             condition: service_healthy
-  #         rabbitmq:
-  #             condition: service_healthy
-  #         order-service:
-  #             condition: service_started
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    env_file:
+      - ./payment-service/.env
+    ports:
+      - '8084:8084'
+    depends_on:
+      payment_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      order-service:
+        condition: service_started
 
   notification-service:
     build:
@@ -242,7 +242,7 @@ volumes:
   postgres_user_data:
   postgres_product_data:
   postgres_order_data:
-  # postgres_payment_data:
+  postgres_payment_data:
   postgres_notification_data:
   elasticsearch_data:
   redis_data:
